@@ -1,0 +1,67 @@
+appId: cn.edu.szft.hqzx.agent
+productName: 华强以太
+copyright: 华强职校校园文化风格项目
+directories:
+  output: output
+  buildResources: build
+electronDist: node_modules/electron/dist
+npmRebuild: false
+asar: true
+compression: maximum
+electronLanguages:
+  - zh-CN
+  - en-US
+files:
+  - '!app/**/*'
+  - '!tests/**/*'
+  - '!shots/**/*'
+  - '!tmp/**/*'
+  - '!installer/**/*'
+  - '!scripts/**/*'
+  - '!output/**/*'
+  - '!.signing/**/*'
+  - '!.dev-profile/**/*'
+  - '!runtime/**/*'
+  - '!install-*/**/*'
+  - '!*.pfx'
+  - '!*.cer'
+  - '!.npm-cache/**/*'
+  - '!.electron-cache/**/*'
+  - '!.electron-builder-cache/**/*'
+  - '!*.log'
+  - '!electron.vite.config.ts'
+  - '!vitest.config.ts'
+  - '!tsconfig*.json'
+  - '!README.md'
+  - '!install.log'
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+  - from: out/main/worker.js
+    to: worker.js
+  - from: out/main/chunks
+    to: chunks
+  - from: runtime/python
+    to: runtime/python
+win:
+  icon: build/icon.ico
+  executableName: HuaqiangAgent
+  # 普通权限运行：Windows UIPI 会阻止把资源管理器中的文件拖进管理员窗口，
+  # 应用本身不需要管理员权限（安装器会为 profile 目录授权）。
+  requestedExecutionLevel: asInvoker
+  artifactName: HuaqiangAgent-${version}-${arch}.${ext}
+  target:
+    - target: portable
+      arch:
+        - x64
+portable:
+  artifactName: HuaqiangAgent-${version}-portable.${ext}
+  requestExecutionLevel: user
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 华强以太
+  artifactName: HuaqiangAgent-${version}-setup.${ext}

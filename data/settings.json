@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "custom",
+      "name": "通用接口",
+      "provider": "openai",
+      "baseUrl": "http://10.1.0.10:8080/v1/chat/completions",
+      "model": "swift-1.5-iq2_xs",
+      "contextWindow": 128000,
+      "temperature": 0.2,
+      "maxTokens": 128000
+    }
+  ],
+  "activeProfileId": "custom",
+  "workspace": "D:\\华强以太项目",
+  "elevateOnStart": false,
+  "agentElevated": false,
+  "approvalMode": "ask",
+  "maxSteps": 0,
+  "mcpServers": [],
+  "systemPromptExtra": ""
+}
