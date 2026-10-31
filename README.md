@@ -1,5 +1,7 @@
 # 华强以太 · HQ Aetheon
 
+[![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
+
 > 华而实，善则强。
 
 本地 AI 编程与系统助手，Windows 桌面应用。可以读写文件、修改代码、执行命令、浏览网页，并通过 MCP 调用外部工具。
@@ -400,15 +402,15 @@ output/                   打包输出，不提交
 
 ## 许可证
 
-本项目采用 **GNU General Public License v3.0**，SPDX 标识：
+本项目采用 **GNU General Public License v3.0 only**，SPDX 标识：
 
 ```text
 GPL-3.0-only
 ```
 
-完整条款见 [LICENSE](LICENSE)。
+完整条款见 [LICENSE](LICENSE)，版权声明见 [COPYRIGHT](COPYRIGHT)。
 
-分发修改后的版本时必须继续使用 GPLv3，并提供对应源代码。本项目不提供任何担保。
+你可以自由使用、修改和分发本项目。分发修改后的版本时必须继续使用 GPLv3，并提供对应源代码。本项目不提供任何担保。
 
 ![模型设置](docs/assets/settings-model.png)
 
