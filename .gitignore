@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Generated build output
+out/
+output/
+dist/
+*.log
+
+# Generated portable runtime (npm run prepare:python)
+runtime/
+
+# Local application data
+.dev-profile/
+data/
+profile/
+install-*/
+tmp/
+shots/
+
+# Tool caches
+.npm-cache/
+.electron-cache/
+.electron-builder-cache/
+.vite/
+coverage/
+
+# Secrets and signing material
+.env
+.env.*
+.signing/
+*.pfx
+*.p12
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.lnk
