@@ -196,9 +196,21 @@ npm test
   `http://10.1.0.10:8080/v1/chat/completions`
 - 以上运行目录都已在 `.gitignore` 中排除。
 
-## 许可
+## 许可证
 
-本项目未声明开源许可证。源代码仅用于项目开发与内部使用，未经许可不得分发、转售或用于商业用途。
+本项目采用 **GNU General Public License v3.0**，SPDX 标识：
+
+```text
+GPL-3.0-only
+```
+
+完整条款见：
+
+```text
+LICENSE
+```
+
+你可以自由使用、修改和分发本项目，但分发修改后的版本时必须继续使用 GPLv3，并提供对应源代码。本项目不提供任何担保。
 
 ![模型设置](docs/assets/settings-model.png)
 

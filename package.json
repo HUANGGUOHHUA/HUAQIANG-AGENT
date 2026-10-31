@@ -4,7 +4,7 @@
   "description": "华强以太 - 华强职校风格的本地 AI 编程 Agent",
   "main": "./out/main/index.js",
   "author": "Huaqiang Aetheon Project",
-  "license": "UNLICENSED",
+  "license": "GPL-3.0-only",
   "private": true,
   "scripts": {
     "dev": "electron-vite dev --noSandbox",
