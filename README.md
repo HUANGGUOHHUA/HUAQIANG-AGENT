@@ -21,6 +21,25 @@
 - **便携 Python**：随项目下载，不依赖用户电脑安装办公库
 - **安装包**：便携版 exe 和 Windows 安装版
 
+## 快速开始（从源码运行）
+
+适用于 Windows 10/11 x64，已安装 Node.js 22.12+ 和 64 位 Python 3.12：
+
+```powershell
+git clone https://github.com/HUANGGUOHHUA/HUAQIANG-AGENT.git
+cd HUAQIANG-AGENT
+.\下载依赖\下载依赖.bat
+npm.cmd run dev
+```
+
+首次运行会下载约 600MB 依赖，通常需要 5–15 分钟。`下载依赖` 会自动安装 Electron 和便携 Python；之后启动只需要：
+
+```powershell
+npm.cmd run dev
+```
+
+普通用户只需要安装包，不需要 Node.js 或 Python。
+
 ## 前置条件
 
 | 条件 | 要求 | 用途 |
@@ -90,11 +109,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\下载依赖\下载依赖.
 脚本会自动：
 
 1. 检查 Node.js 和 npm
-2. 执行 `npm install`
-3. 下载 Python 3.12 embeddable
-4. 安装便携 Python 到 `runtime/python`
-5. 安装办公、数据、图片、PDF 依赖
-6. 检查所有 Python 包能否导入
+2. 执行 `npm.cmd install`，并通过 npmmirror 补齐 Electron 二进制
+3. 检查 `runtime/python`
+4. 运行时只缺 Python 包时原地修复，不删除整个运行时
+5. 运行时缺失或损坏时，先在临时目录完整构建、测试，再替换旧目录
+6. 下载/安装中途关闭时保留旧运行时，下次启动自动清理临时文件
+7. 替换过程中被中断时，自动从 `runtime/python.old` 回滚
+8. pip 镜像失败时回退到官方 PyPI
+9. 检查所有 Python 包能否导入
 
 如果 `runtime/python` 已完整，脚本会跳过 Python 下载。
 
@@ -109,16 +131,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\下载依赖\下载依赖.
 不使用一键脚本时：
 
 ```powershell
-npm install
-npm run prepare:python
+npm.cmd install
+npm.cmd run prepare:python
 ```
 
-注意：`npm run prepare:python` 会删除并重建 `runtime/python`，需要系统 Python 3.12。
+注意：`npm.cmd run prepare:python` 会删除并重建 `runtime/python`，需要系统 Python 3.12。
 
 ## 启动开发版
 
 ```powershell
-npm run dev
+npm.cmd run dev
 ```
 
 启动成功后会打开：
@@ -247,20 +269,20 @@ data/conversations/<会话ID>.json
 
 | 命令 | 作用 |
 | --- | --- |
-| `npm run dev` | 启动开发窗口 |
-| `npm run typecheck` | TypeScript 类型检查 |
-| `npm test` | 运行测试 |
-| `npm run build` | 构建到 `out/` |
-| `npm run prepare:python` | 重建便携 Python |
-| `npm run pack` | 生成便携版到 `output/` |
-| `npm run installer` | 生成安装版到 `output/` |
-| `npm run pack:dir` | 生成可直接运行的目录 |
+| `npm.cmd run dev` | 启动开发窗口 |
+| `npm.cmd run typecheck` | TypeScript 类型检查 |
+| `npm.cmd test` | 运行测试 |
+| `npm.cmd run build` | 构建到 `out/` |
+| `npm.cmd run prepare:python` | 重建便携 Python |
+| `npm.cmd run pack` | 生成便携版到 `output/` |
+| `npm.cmd run installer` | 生成安装版到 `output/` |
+| `npm.cmd run pack:dir` | 生成可直接运行的目录 |
 
 ## 测试
 
 ```powershell
-npm run typecheck
-npm test
+npm.cmd run typecheck
+npm.cmd test
 ```
 
 当前：15 个测试文件，62 个测试通过。
@@ -268,7 +290,7 @@ npm test
 UI 冒烟测试：
 
 ```powershell
-npm run build
+npm.cmd run build
 node tests/ui-server.cjs
 node tests/ui-features.cjs
 ```
@@ -276,8 +298,8 @@ node tests/ui-features.cjs
 ## 打包
 
 ```powershell
-npm run pack
-npm run installer
+npm.cmd run pack
+npm.cmd run installer
 ```
 
 输出：
@@ -291,8 +313,8 @@ output/
 
 打包前需要：
 
-- 已执行 `npm install`
-- 已执行 `npm run prepare:python`
+- 已执行 `npm.cmd install`
+- 已执行 `npm.cmd run prepare:python`
 - Windows 已安装 .NET Framework 4.8
 
 安装器不会自动启动应用，安装完成后由用户从桌面或开始菜单打开。
@@ -302,7 +324,7 @@ output/
 ```powershell
 cd HUAQIANG-AGENT
 git pull
-npm install
+npm.cmd install
 ```
 
 如果 `package-lock.json` 或 Python 依赖发生变化，重新执行：
@@ -317,13 +339,13 @@ npm install
 
 Node.js 没有安装或没有加入 PATH。重新安装 Node.js 后打开新的终端。
 
-### `npm install` 下载 Electron 失败
+### `npm.cmd install` 下载 Electron 失败
 
 可能是网络问题。可以设置 npm 镜像后重试：
 
 ```powershell
-npm config set registry https://registry.npmmirror.com
-npm install
+npm.cmd config set registry https://registry.npmmirror.com
+npm.cmd install
 ```
 
 ### `python` 不是内部或外部命令
@@ -341,7 +363,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\下载依赖\下载依赖.
 关闭残留的 Electron 或 Node 进程后重新执行：
 
 ```powershell
-npm run dev
+npm.cmd run dev
 ```
 
 ### 页面空白或缓存异常
