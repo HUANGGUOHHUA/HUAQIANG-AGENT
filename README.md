@@ -21,6 +21,25 @@
 - **便携 Python**：随项目下载，不依赖用户电脑安装办公库
 - **安装包**：便携版 exe 和 Windows 安装版
 
+## 快速开始（从源码运行）
+
+适用于 Windows 10/11 x64，已安装 Node.js 22.12+ 和 64 位 Python 3.12：
+
+```powershell
+git clone https://github.com/HUANGGUOHHUA/HUAQIANG-AGENT.git
+cd HUAQIANG-AGENT
+.\下载依赖\下载依赖.bat
+npm.cmd run dev
+```
+
+首次运行会下载约 600MB 依赖，通常需要 5–15 分钟。`下载依赖` 会自动安装 Electron 和便携 Python；之后启动只需要：
+
+```powershell
+npm.cmd run dev
+```
+
+普通用户只需要安装包，不需要 Node.js 或 Python。
+
 ## 前置条件
 
 | 条件 | 要求 | 用途 |
