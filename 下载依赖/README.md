@@ -22,6 +22,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\下载依赖.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\下载依赖.ps1 -Force
 ```
 
+## 乱码 / 语法错误
+
+如果双击后出现类似：
+
+```text
+Unexpected token '}' ...
+Unexpected token '妫€鏌?Node.js' ...
+```
+
+说明 PowerShell 脚本被保存成了 **UTF-8 without BOM**。Windows PowerShell 5.1 会把无 BOM 的 UTF-8 中文按 GBK 解析，所以既乱码又报语法错误。
+
+处理：
+
+1. 确认 `下载依赖.ps1` 的文件编码为 **UTF-8 with BOM**；
+2. 在 PyCharm 中启用 EditorConfig：`Settings → Editor → Code Style → Enable EditorConfig support`；
+3. 项目根目录 `.editorconfig` 已设置：
+
+```ini
+[*.ps1]
+charset = utf-8-bom
+```
+
+4. 重新从 Git 拉取文件，或把文件重新保存为 UTF-8 with BOM，再双击 `下载依赖.bat`。
+
+不要用普通“UTF-8”格式覆盖 `.ps1`，也不要在 PyCharm 里直接双击 `.bat` 运行；请右键运行，或在终端执行。
+
 ## 会安装什么
 
 1. **前端 / Electron 依赖**
