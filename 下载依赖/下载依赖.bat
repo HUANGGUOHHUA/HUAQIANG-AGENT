@@ -2,16 +2,16 @@
 chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
-title 华强以太 - 下载依赖
+title Huaqiang Aetheon - Dependencies
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0下载依赖.ps1"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0下载依赖.ps1"
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
 if not "%EXIT_CODE%"=="0" (
-  echo 依赖下载失败，退出码：%EXIT_CODE%
+  echo Dependency setup failed. Exit code: %EXIT_CODE%
 ) else (
-  echo 依赖下载完成。
+  echo Dependency setup completed.
 )
 pause
 exit /b %EXIT_CODE%

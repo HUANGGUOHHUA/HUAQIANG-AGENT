@@ -2,6 +2,15 @@
     [switch]$Force
 )
 
+# Keep Chinese output readable in Windows PowerShell 5.1 console windows.
+try {
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = $utf8
+    $OutputEncoding = $utf8
+} catch {
+    # Redirected or non-console hosts can reject the encoding change.
+}
+
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $root "runtime\python\python.exe"
