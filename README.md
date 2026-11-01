@@ -94,8 +94,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\下载依赖\下载依赖.
 3. 检查 `runtime/python`
 4. 运行时只缺 Python 包时原地修复，不删除整个运行时
 5. 运行时缺失或损坏时，先在临时目录完整构建、测试，再替换旧目录
-6. pip 镜像失败时回退到官方 PyPI，下载失败时不破坏已有运行时
-7. 检查所有 Python 包能否导入
+6. 下载/安装中途关闭时保留旧运行时，下次启动自动清理临时文件
+7. 替换过程中被中断时，自动从 `runtime/python.old` 回滚
+8. pip 镜像失败时回退到官方 PyPI
+9. 检查所有 Python 包能否导入
 
 如果 `runtime/python` 已完整，脚本会跳过 Python 下载。
 

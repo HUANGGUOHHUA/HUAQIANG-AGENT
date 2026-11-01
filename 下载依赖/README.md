@@ -42,6 +42,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\下载依赖.ps1 -Force
    - 运行时完整：直接跳过
    - 只缺 Python 包：原地修复，不删除整个运行时
    - 运行时缺失或损坏：先在临时目录完整构建并测试，成功后才替换旧目录；失败时保留旧版本
+   - 下载或安装中途关闭：旧运行时保持可用；下次启动自动清理临时目录
+   - 替换过程中被中断：自动从 `runtime/python.old` 恢复旧版本
    - pip 优先使用清华镜像，失败后回退到官方 PyPI
    - Python embeddable 优先使用华为镜像，失败后回退到 python.org
 

@@ -14,6 +14,8 @@ try {
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $runtimePython = Join-Path $root 'runtime\python\python.exe'
+$runtimeBuilding = Join-Path $root 'runtime\python.building'
+$runtimeOld = Join-Path $root 'runtime\python.old'
 $electron = Join-Path $root 'node_modules\electron\dist\electron.exe'
 $prepare = Join-Path $root 'scripts\prepare-python-runtime.ps1'
 $log = Join-Path $env:TEMP 'HuaqiangAgent-deps.log'
@@ -141,8 +143,16 @@ try {
     }
 
     # ---------------------------------------------------------------- Python
-    if ($Force -or -not (Test-Runtime)) {
-        Write-Step $(if ($Force) { '强制重建便携 Python 运行时' } else { '准备便携 Python 运行时' })
+    $needsRecovery = (Test-Path -LiteralPath $runtimeBuilding) -or (Test-Path -LiteralPath $runtimeOld)
+    if ($Force -or $needsRecovery -or -not (Test-Runtime)) {
+        if ($Force) {
+            $pythonStep = '强制重建便携 Python 运行时'
+        } elseif ($needsRecovery) {
+            $pythonStep = '恢复上次中断的便携 Python 运行时'
+        } else {
+            $pythonStep = '准备便携 Python 运行时'
+        }
+        Write-Step $pythonStep
         if (-not (Test-Path -LiteralPath $prepare)) {
             throw "缺少脚本：$prepare"
         }

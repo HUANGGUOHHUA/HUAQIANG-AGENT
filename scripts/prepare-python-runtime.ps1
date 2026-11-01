@@ -325,6 +325,22 @@ try {
     Write-Host "项目目录：$root"
     Write-Host "日志文件：$log"
 
+    # Recover from a previous build that was closed/paused during the swap.
+    $runtimeExists = Test-Path -LiteralPath $runtime
+    $backupExists = Test-Path -LiteralPath $backup
+    if (-not $runtimeExists -and $backupExists) {
+        Write-Warning '上次替换运行时中断，正在恢复旧版本...'
+        Move-Item -LiteralPath $backup -Destination $runtime -Force
+    } elseif ($runtimeExists -and $backupExists) {
+        Write-Warning '清理上次中断留下的旧运行时备份...'
+        Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if (Test-Path -LiteralPath $staging) {
+        Write-Warning '清理上次中断留下的临时目录...'
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     if ($Repair) {
         if (-not (Test-Path -LiteralPath $python)) {
             throw 'runtime/python 不存在，无法使用 -Repair。'
