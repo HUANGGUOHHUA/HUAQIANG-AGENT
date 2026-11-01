@@ -11,66 +11,172 @@ try {
     # Redirected or non-console hosts can reject the encoding change.
 }
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$python = Join-Path $root "runtime\python\python.exe"
-$packages = "openpyxl, docx, pptx, pypdf, reportlab, pandas, numpy, matplotlib, PIL, requests, bs4, xlsxwriter, pdfplumber"
-
-Set-Location $root
+$runtimePython = Join-Path $root 'runtime\python\python.exe'
+$electron = Join-Path $root 'node_modules\electron\dist\electron.exe'
+$prepare = Join-Path $root 'scripts\prepare-python-runtime.ps1'
+$log = Join-Path $env:TEMP 'HuaqiangAgent-deps.log'
+$imports = @(
+    'openpyxl', 'docx', 'pptx', 'pypdf', 'reportlab',
+    'pandas', 'numpy', 'matplotlib', 'PIL', 'requests',
+    'bs4', 'xlsxwriter', 'pdfplumber'
+)
 
 function Write-Step([string]$text) {
-    Write-Host ""
+    Write-Host ''
     Write-Host "==> $text" -ForegroundColor Cyan
 }
 
 function Test-Runtime {
-    if (-not (Test-Path $python)) { return $false }
-    & $python -c "import $packages" 2>$null
-    return $LASTEXITCODE -eq 0
+    if (-not (Test-Path -LiteralPath $runtimePython)) { return $false }
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $runtimePython -c "import $($imports -join ', '); print('OK')" 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        $ErrorActionPreference = $previous
+    }
 }
 
-Write-Host "华强以太 · 下载开发依赖" -ForegroundColor Green
-Write-Host "项目目录：$root"
-
-if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
-    throw "未找到 Node.js。请先安装 Node.js 22.12 或更高版本。"
+function Invoke-Native([string]$FilePath, [string[]]$Arguments) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $FilePath @Arguments 2>&1 | Out-Host
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
 }
-if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
-    throw "未找到 npm。请重新安装 Node.js，并确保 npm 在 PATH 中。"
+
+function Get-PowerShell {
+    $candidate = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path -LiteralPath $candidate) { return $candidate }
+    $cmd = Get-Command powershell.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    throw '未找到 Windows PowerShell。'
 }
 
-Write-Step "检查 Node.js / npm"
-node --version
-npm --version
-
-Write-Step "安装前端 / Electron 依赖（node_modules）"
-& npm.cmd install --no-audit --no-fund
-if ($LASTEXITCODE -ne 0) { throw "npm install 失败。" }
-
-$runtimeReady = Test-Runtime
-if ($Force -or -not $runtimeReady) {
-    Write-Step "下载并安装便携 Python 运行时（runtime/python）"
-
-    $systemPython = Get-Command python.exe -ErrorAction SilentlyContinue
-    if (-not $systemPython) {
-        throw "未找到系统 Python 3.12。首次构建 runtime 需要本机 Python 3.12 来引导 pip。"
+$exitCode = 0
+$transcriptStarted = $false
+try {
+    try {
+        Start-Transcript -Path $log -Force | Out-Null
+        $transcriptStarted = $true
+    } catch {
     }
 
-    & $systemPython.Source -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)"
-    if ($LASTEXITCODE -ne 0) {
-        throw "系统 Python 版本不是 3.12。请安装 Python 3.12 后重试。"
+    Set-Location $root
+    Write-Host '华强以太 · 下载开发依赖' -ForegroundColor Green
+    Write-Host "项目目录：$root"
+    Write-Host "日志文件：$log"
+
+    # ---------------------------------------------------------------- Node.js
+    Write-Step '检查 Node.js / npm'
+    $node = Get-Command node.exe -ErrorAction SilentlyContinue
+    if (-not $node) {
+        throw '未找到 Node.js。请安装 Node.js 22.12 或更高版本，并勾选 Add to PATH。'
     }
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\prepare-python-runtime.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "便携 Python 安装失败。" }
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        throw '未找到 npm.cmd。请重新安装 Node.js，并确保 npm 在 PATH 中。'
+    }
 
-    if (-not (Test-Runtime)) { throw "便携 Python 已安装，但依赖导入检查失败。" }
-} else {
-    Write-Step "便携 Python 已存在，跳过下载"
+    $nodeText = ((& $node.Source --version 2>$null) -join ' ').Trim()
+    if ($LASTEXITCODE -ne 0) { throw "node --version 执行失败（退出码 $LASTEXITCODE）。" }
+
+    $match = [regex]::Match($nodeText, '^v?(\d+)\.(\d+)\.(\d+)')
+    if (-not $match.Success) { throw "无法识别 Node.js 版本：$nodeText" }
+
+    $nodeVersion = [version]::new(
+        [int]$match.Groups[1].Value,
+        [int]$match.Groups[2].Value,
+        [int]$match.Groups[3].Value
+    )
+    if ($nodeVersion -lt [version]'22.12.0') {
+        throw "Node.js 版本过低：$nodeText，需要 22.12 或更高。"
+    }
+
+    $npmText = ((& $npm.Source --version 2>$null) -join ' ').Trim()
+    if ($LASTEXITCODE -ne 0) { throw "npm --version 执行失败（退出码 $LASTEXITCODE）。" }
+
+    Write-Host "Node.js：$nodeText" -ForegroundColor Green
+    Write-Host "npm：$npmText" -ForegroundColor Green
+
+    # ------------------------------------------------------------ node_modules
+    # Electron's postinstall downloads from GitHub by default, which is often
+    # unreachable on Chinese networks. Keep a user-provided mirror if present.
+    if (-not $env:ELECTRON_MIRROR) {
+        $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
+    }
+    Remove-Item Env:ELECTRON_SKIP_BINARY_DOWNLOAD -ErrorAction SilentlyContinue
+
+    Write-Step '安装前端 / Electron 依赖（node_modules）'
+    $npmArgs = @('install', '--no-audit', '--no-fund', '--loglevel=error')
+    $npmExit = Invoke-Native $npm.Source $npmArgs
+    if ($npmExit -ne 0) {
+        Write-Warning "npm install 失败（退出码 $npmExit），使用缓存重试一次。"
+        $retryArgs = $npmArgs + @('--prefer-offline')
+        $npmExit = Invoke-Native $npm.Source $retryArgs
+    }
+    if ($npmExit -ne 0) {
+        throw 'npm install 失败。请检查网络或代理设置后重试。'
+    }
+
+    if (-not (Test-Path -LiteralPath $electron)) {
+        $electronInstaller = Join-Path $root 'node_modules\electron\install.js'
+        if (Test-Path -LiteralPath $electronInstaller) {
+            Write-Warning 'Electron 二进制文件缺失，直接运行 electron/install.js 下载。'
+            $electronExit = Invoke-Native $node.Source @($electronInstaller)
+            if ($electronExit -ne 0) {
+                throw "Electron 下载失败（退出码 $electronExit）。请检查网络或 ELECTRON_MIRROR。"
+            }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $electron)) {
+        throw 'node_modules 已安装，但缺少 electron.exe。请删除 node_modules 后重新运行。'
+    }
+
+    # ---------------------------------------------------------------- Python
+    if ($Force -or -not (Test-Runtime)) {
+        Write-Step $(if ($Force) { '强制重建便携 Python 运行时' } else { '准备便携 Python 运行时' })
+        if (-not (Test-Path -LiteralPath $prepare)) {
+            throw "缺少脚本：$prepare"
+        }
+
+        $ps = Get-PowerShell
+        $psArgs = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $prepare)
+        if ($Force) { $psArgs += '-Force' }
+
+        $pythonExit = Invoke-Native $ps $psArgs
+        if ($pythonExit -ne 0) {
+            throw "便携 Python 安装失败（退出码 $pythonExit）。请查看上方输出或 $log。"
+        }
+        if (-not (Test-Runtime)) {
+            throw '便携 Python 已安装，但依赖导入检查仍然失败。'
+        }
+    } else {
+        Write-Step '便携 Python 已完整，跳过'
+    }
+
+    Write-Step '完成'
+    Write-Host "前端依赖：$(Join-Path $root 'node_modules')" -ForegroundColor Green
+    Write-Host "便携 Python：$(Join-Path $root 'runtime\python')" -ForegroundColor Green
+    Write-Host ''
+    Write-Host '现在可以运行：npm.cmd run dev' -ForegroundColor Green
+} catch {
+    Write-Host ''
+    Write-Host "安装失败：$($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "日志文件：$log" -ForegroundColor Yellow
+    Write-Host '修复后重新双击 下载依赖.bat 即可。' -ForegroundColor Yellow
+    $exitCode = 1
+} finally {
+    if ($transcriptStarted) {
+        try { Stop-Transcript | Out-Null } catch { }
+    }
 }
 
-Write-Step "完成"
-Write-Host "前端依赖：$root\node_modules" -ForegroundColor Green
-Write-Host "便携 Python：$root\runtime\python" -ForegroundColor Green
-Write-Host ""
-Write-Host "现在可以运行：npm run dev" -ForegroundColor Green
+exit $exitCode
