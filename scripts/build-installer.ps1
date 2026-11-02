@@ -10,7 +10,7 @@ $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path $csc)) { throw 'csc.exe not found (requires .NET Framework 4.x).' }
 
 $release = Join-Path $root 'output'
-$version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+$version = (Get-Content (Join-Path $root 'package.json') -Raw -Encoding utf8 | ConvertFrom-Json).version
 $payload = Join-Path $release 'app.zip'
 $uninstaller = Join-Path $release 'Uninstall.exe'
 $setupName = "HuaqiangAgent-$version-setup.exe"

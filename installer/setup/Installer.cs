@@ -18,9 +18,9 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("华强以太")]
 [assembly: AssemblyCompany("华强以太")]
 [assembly: AssemblyCopyright("华强以太")]
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
-[assembly: AssemblyInformationalVersion("1.0.1")]
+[assembly: AssemblyVersion("1.0.2.0")]
+[assembly: AssemblyFileVersion("1.0.2.0")]
+[assembly: AssemblyInformationalVersion("1.0.2")]
 
 namespace HuaqiangAgentSetup
 {
@@ -83,7 +83,7 @@ namespace HuaqiangAgentSetup
         public static string LastWarning;
         private const string PayloadResource = "HuaqiangAgent.App.zip";
         private const string UninstallerResource = "HuaqiangAgent.Uninstaller.exe";
-        private const string AppVersion = "1.0.1";
+        private const string AppVersion = "1.0.2";
         private const string UninstallRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\HuaqiangAgent";
 
         public static string DefaultInstallDir
@@ -634,7 +634,7 @@ namespace HuaqiangAgentSetup
             cancelButton.Click += (s, e) => { if (!installing) Close(); };
             var versionLabel = new Label
             {
-                Text = "华强以太 v1.0.1",
+                Text = "华强以太 v1.0.2",
                 Font = new Font("KaiTi", 10F),
                 ForeColor = Color.FromArgb(168, 198, 245),
                 Bounds = new Rectangle(34, 22, 400, 22)

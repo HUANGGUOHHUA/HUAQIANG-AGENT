@@ -1,7 +1,7 @@
 {
   "name": "huaqiang-agent",
-  "version": "1.0.1",
-  "description": "华强以太 - 华强职校风格的本地 AI 编程 Agent",
+  "version": "1.0.2",
+  "description": "华强以太 - 本地 AI 编程与系统助手",
   "main": "./out/main/index.js",
   "author": "Huaqiang Aetheon Project",
   "license": "GPL-3.0-only",
