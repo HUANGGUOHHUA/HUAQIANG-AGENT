@@ -306,8 +306,8 @@ npm.cmd run installer
 
 ```text
 output/
-  HuaqiangAgent-1.0.1-portable.exe
-  HuaqiangAgent-1.0.1-setup.exe
+  HuaqiangAgent-1.0.2-portable.exe
+  HuaqiangAgent-1.0.2-setup.exe
   win-unpacked/
 ```
 

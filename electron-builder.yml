@@ -1,6 +1,6 @@
 appId: cn.edu.szft.hqzx.agent
 productName: 华强以太
-copyright: 华强职校校园文化风格项目
+copyright: Copyright © 2026 华强以太
 directories:
   output: output
   buildResources: build
@@ -21,6 +21,8 @@ files:
   - '!output/**/*'
   - '!.signing/**/*'
   - '!.dev-profile/**/*'
+  - '!data/**/*'
+  - '!profile/**/*'
   - '!runtime/**/*'
   - '!install-*/**/*'
   - '!*.pfx'

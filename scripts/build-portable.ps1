@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$package = Get-Content (Join-Path $root "package.json") -Raw | ConvertFrom-Json
+$package = Get-Content (Join-Path $root "package.json") -Raw -Encoding utf8 | ConvertFrom-Json
 $version = $package.version
 $release = Join-Path $root "output"
 $dist = Join-Path $release "win-unpacked"
