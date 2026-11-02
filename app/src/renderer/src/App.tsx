@@ -929,38 +929,43 @@ export default function App(): React.JSX.Element {
     const result = compactMessages(current.messages, instruction, {
       contextWindow: current.modelContextWindow ?? activeProfile?.contextWindow,
       maxOutputTokens: current.modelMaxTokens ?? activeProfile?.maxTokens,
-      priorSummary: current.contextSummary
+      priorSummary: current.contextSummary,
+      force: true
     })
     if (!result) {
-      showToast('info', '当前对话还不需要压缩（消息较少或没有可丢弃的早期内容）')
+      showToast('info', '至少需要两条消息（一问一答）才能压缩')
       return
     }
     setCompactBusy(true)
     showToast('info', '正在用当前模型压缩上下文…')
     let summary = result.summary
     let usedModel = false
-    try {
-      const remote = await window.hq.compactConversation({
-        messages: result.older,
-        instruction,
-        model: current.model,
-        priorSummary: current.contextSummary
-      })
-      if (remote.ok && remote.summary) {
-        summary = [
-          'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it.',
-          '',
-          '<compacted-summary>',
-          remote.summary,
-          '</compacted-summary>'
-        ].join('\n')
-        usedModel = true
-      } else if (remote.error) {
-        showToast('info', `模型摘要失败，已使用本地摘要：${stripIpcError(remote.error)}`)
+    if (result.older.length >= 2) {
+      try {
+        const remote = await window.hq.compactConversation({
+          messages: result.older,
+          instruction,
+          model: current.model,
+          priorSummary: current.contextSummary
+        })
+        if (remote.ok && remote.summary) {
+          summary = [
+            'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it.',
+            '',
+            '<compacted-summary>',
+            remote.summary,
+            '</compacted-summary>'
+          ].join('\n')
+          usedModel = true
+        } else if (remote.error) {
+          showToast('info', `模型摘要失败，已使用本地摘要：${stripIpcError(remote.error)}`)
+        }
+      } catch (error) {
+        showToast('info', `模型摘要失败，已使用本地摘要：${stripIpcError(String(error))}`)
+      } finally {
+        setCompactBusy(false)
       }
-    } catch (error) {
-      showToast('info', `模型摘要失败，已使用本地摘要：${stripIpcError(String(error))}`)
-    } finally {
+    } else {
       setCompactBusy(false)
     }
     const next: ChatSession = {

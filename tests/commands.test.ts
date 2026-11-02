@@ -59,6 +59,34 @@ describe('slash commands', () => {
     expect(compactMessages(messages, '保留接口')).toBeNull()
   })
 
+  it('force-compacts a short conversation when the user asks for it', () => {
+    const messages: AppMessage[] = []
+    for (let i = 0; i < 4; i += 1) {
+      messages.push(message('user', `第 ${i} 轮需求`, i * 2))
+      messages.push(message('assistant', `第 ${i} 轮回复`, i * 2 + 1))
+    }
+    const result = compactMessages(messages, '保留接口', { force: true })
+    expect(result).not.toBeNull()
+    expect(result!.removed).toBeGreaterThan(0)
+    expect(result!.messages.length).toBeGreaterThan(0)
+    expect(result!.summary).toContain('compacted-summary')
+  })
+
+  it('force-compacts two messages but keeps the newest one', () => {
+    const result = compactMessages(
+      [message('user', '实现登录', 1), message('assistant', '已完成登录页', 2)],
+      '保留接口',
+      { force: true }
+    )
+    expect(result).not.toBeNull()
+    expect(result!.older).toHaveLength(1)
+    expect(result!.messages).toHaveLength(1)
+  })
+
+  it('still refuses to compact a single message', () => {
+    expect(compactMessages([message('user', '只有一条消息', 1)], '保留接口', { force: true })).toBeNull()
+  })
+
   it('exports a session with context summary and tool paths', () => {
     const markdown = sessionMarkdown({
       title: '登录页',

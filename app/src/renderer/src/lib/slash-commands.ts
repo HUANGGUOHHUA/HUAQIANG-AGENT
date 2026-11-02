@@ -91,6 +91,8 @@ export interface CompactOptions {
   maxOutputTokens?: number
   retainRatio?: number
   priorSummary?: string
+  /** Manual compaction may force a split even when the recent window covers everything. */
+  force?: boolean
 }
 
 export function compactMessages(
@@ -125,10 +127,26 @@ export function compactMessages(
   if (messages[keepStart]?.role !== 'user') {
     while (keepStart < messages.length && messages[keepStart].role !== 'user') keepStart += 1
   }
-  if (keepStart <= 0 || keepStart >= messages.length) return null
+  if (keepStart <= 0 || keepStart >= messages.length) {
+    // The normal token window says there is nothing worth dropping. A manual
+    // /compact still has to do something, so keep the newest turn (or at least
+    // the newest message) and summarize everything before it.
+    if (!options.force || messages.length < 2) return null
+
+    let fallbackStart = messages.length - 1
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'user') {
+        fallbackStart = index
+        break
+      }
+    }
+    if (fallbackStart <= 0) fallbackStart = messages.length - 1
+    keepStart = fallbackStart
+  }
 
   const older = messages.slice(0, keepStart)
   const recent = messages.slice(keepStart)
+  retainedTokens = recent.reduce((total, message) => total + estimateMessageTokens(message), 0)
   const lines: string[] = []
   let chars = 0
   for (const message of older) {
