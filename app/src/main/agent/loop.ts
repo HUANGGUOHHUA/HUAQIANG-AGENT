@@ -122,7 +122,8 @@ export function prepareContext(
   messages: AppMessage[],
   contextWindow: number | undefined,
   maxOutputTokens: number,
-  systemPrompt: string
+  systemPrompt: string,
+  compactAtRatio = 1
 ): PreparedContext {
   const valid = (Array.isArray(messages) ? messages : []).filter(
     (message) =>
@@ -143,15 +144,21 @@ export function prepareContext(
     Math.max(1_024, maxOutputTokens),
     Math.max(2_048, Math.floor(window * 0.25))
   )
-  const budget = Math.max(
-    4_000,
-    window - outputReserve - CONTEXT_SAFETY_TOKENS - estimateTokens(systemPrompt)
-  )
+  const systemTokens = estimateTokens(systemPrompt)
+  let budget = Math.max(4_000, window - outputReserve - CONTEXT_SAFETY_TOKENS - systemTokens)
 
   let start = Math.max(0, compacted.length - MAX_HISTORY_MESSAGES)
   const dropped = compacted.slice(0, start)
   let slice = compacted.slice(start)
   let tokens = slice.reduce((total, message) => total + messageTokens(message), 0)
+
+  // DeepSeek Harness compacts before the model step reaches the window limit.
+  // At the configured pressure ratio, shrink to the 16% verbatim tail instead
+  // of waiting for the 100% hard limit.
+  if (compactAtRatio > 0 && compactAtRatio < 1 && systemTokens + tokens >= window * compactAtRatio) {
+    const retainBudget = Math.max(1_024, Math.floor((window - outputReserve) * 0.16))
+    budget = Math.max(1_000, retainBudget - systemTokens)
+  }
 
   while (tokens > budget && slice.length > 1) {
     const removed = slice[0]
@@ -263,12 +270,12 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
     options.messages,
     options.contextWindow,
     options.provider.maxTokens,
-    baseSystemPrompt
+    baseSystemPrompt,
+    0.65
   )
-  const history = prepared.messages
-  const systemPrompt = prepared.summary
-    ? `${baseSystemPrompt}\n\n${prepared.summary}`
-    : baseSystemPrompt
+  let history = prepared.messages
+  let summary = prepared.summary
+  let systemPrompt = summary ? `${baseSystemPrompt}\n\n${summary}` : baseSystemPrompt
   const toolMap = new Map(options.tools.map((tool) => [tool.name, tool]))
   const providerTools: ProviderTool[] = options.tools.map((tool) => ({
     name: tool.name,
@@ -661,6 +668,31 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
 
     emit({ type: 'assistant-end', runId, message: assistantMessage })
     history.push(assistantMessage)
+
+    // Compact between tool steps, mirroring DSH's pre-step pressure check.
+    // Without this, a long tool loop can grow from 65% to 99% before the next
+    // user turn ever gets a chance to compact.
+    const refreshed = prepareContext(
+      history,
+      options.contextWindow,
+      options.provider.maxTokens,
+      baseSystemPrompt,
+      0.65
+    )
+    if (refreshed.dropped > 0) {
+      history = refreshed.messages
+      summary = [summary, refreshed.summary]
+        .filter(Boolean)
+        .join('\n\n')
+        .slice(-16_000)
+      systemPrompt = summary ? `${baseSystemPrompt}\n\n${summary}` : baseSystemPrompt
+      emit({
+        type: 'context-compressed',
+        runId,
+        dropped: refreshed.dropped,
+        summaryChars: summary.length
+      })
+    }
 
     if (signal.aborted) return finishAborted()
   }

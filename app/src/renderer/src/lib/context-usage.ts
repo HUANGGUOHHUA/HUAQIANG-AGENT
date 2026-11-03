@@ -17,35 +17,45 @@ export interface ContextUsageInput {
   contextWindow?: number
 }
 
-export const AUTO_COMPACT_PERCENT = 70
+export const AUTO_COMPACT_PERCENT = 65
 
 export function shouldAutoCompact(
   usage: Pick<ContextUsage, 'percent'>,
-  messageCount: number,
   locked: boolean,
   queued: boolean
 ): boolean {
-  return !locked && !queued && messageCount >= 6 && usage.percent >= AUTO_COMPACT_PERCENT
+  return !locked && !queued && usage.percent >= AUTO_COMPACT_PERCENT
+}
+
+function estimateTextTokens(text: string | undefined): number {
+  if (!text) return 0
+  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length
+  return Math.ceil(cjk + (text.length - cjk) / 4)
 }
 
 export function estimateMessageTokens(message: AppMessage): number {
-  let chars = 24 + (message.content?.length ?? 0) + (message.reasoning?.length ?? 0)
+  let tokens = 24 + estimateTextTokens(message.content) + estimateTextTokens(message.reasoning)
   for (const call of message.toolCalls ?? []) {
-    chars += call.name.length + (call.displayName?.length ?? 0)
-    chars += JSON.stringify(call.args ?? {}).length
-    chars += call.result?.length ?? 0
+    tokens += estimateTextTokens(call.name)
+    tokens += estimateTextTokens(call.displayName)
+    tokens += estimateTextTokens(JSON.stringify(call.args ?? {}))
+    tokens += estimateTextTokens(call.result)
   }
-  return Math.ceil(chars / 3.5)
+  return Math.ceil(tokens)
 }
 
 /**
- * Lightweight token estimate used for the capacity ring and the 70% compaction trigger.
- * It is intentionally approximate: Chinese/code mix around 3.5 characters per token.
+ * Lightweight token estimate used for the capacity ring and the 65% compaction trigger.
+ * It is intentionally approximate: CJK is about one token per character, ASCII/code
+ * about four characters per token, matching the main-process estimator.
  */
 export function estimateContextUsage(input: ContextUsageInput): ContextUsage {
-  const systemTokens = Math.ceil(
-    (5_000 + (input.systemPromptExtra?.length ?? 0) + (input.contextSummary?.length ?? 0)) / 3.5
-  )
+  // Match the main-process token estimator: CJK is close to one token per
+  // character, while ASCII/code is roughly four characters per token.
+  const systemTokens =
+    1_250 +
+    estimateTextTokens(input.systemPromptExtra) +
+    estimateTextTokens(input.contextSummary)
   const toolTokens = 7_200
 
   let messageTokens = 0
@@ -56,12 +66,10 @@ export function estimateContextUsage(input: ContextUsageInput): ContextUsage {
   for (const attachment of input.attachments ?? []) {
     if (attachment.kind === 'image') {
       messageTokens += 1_500
-      messageTokens += Math.ceil((attachment.ocrText?.length ?? 0) / 3.5)
+      messageTokens += estimateTextTokens(attachment.ocrText)
     } else {
       messageTokens += 40
-      messageTokens += Math.ceil(
-        (attachment.content?.length ?? attachment.ocrText?.length ?? 0) / 3.5
-      )
+      messageTokens += estimateTextTokens(attachment.content ?? attachment.ocrText)
     }
   }
 

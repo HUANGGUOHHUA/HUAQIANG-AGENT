@@ -22,13 +22,21 @@ describe('context usage estimate', () => {
     expect(usage.percent).toBeLessThan(10)
   })
 
-  it('crosses the 70% threshold for a large history', () => {
+  it('crosses the 65% threshold for a large history', () => {
     const messages = Array.from({ length: 30 }, (_, index) =>
       message('x'.repeat(12_000), index)
     )
     const usage = estimateContextUsage({ messages, contextWindow: 100_000 })
     expect(usage.percent).toBeGreaterThan(70)
     expect(usage.percent).toBeLessThanOrEqual(100)
+  })
+
+  it('prices Chinese text at roughly one token per character', () => {
+    const usage = estimateContextUsage({
+      messages: [message('中'.repeat(10_000), 0)],
+      contextWindow: 128_000
+    })
+    expect(usage.messageTokens).toBeGreaterThanOrEqual(10_000)
   })
 
   it('counts image and text attachments', () => {
@@ -45,13 +53,15 @@ describe('context usage estimate', () => {
     expect(text.tokens).toBeGreaterThan(image.tokens)
   })
 
-  it('only auto compacts above 70% with enough history and no lock/queue', () => {
-    const low = { tokens: 1000, limit: 100_000, percent: 1 }
-    const high = { tokens: 80_000, limit: 100_000, percent: 80 }
-    expect(shouldAutoCompact(high, 8, false, false)).toBe(true)
-    expect(shouldAutoCompact(high, 5, false, false)).toBe(false)
-    expect(shouldAutoCompact(high, 8, true, false)).toBe(false)
-    expect(shouldAutoCompact(high, 8, false, true)).toBe(false)
-    expect(shouldAutoCompact(low, 8, false, false)).toBe(false)
+  it('auto compacts at 65% regardless of message count, unless locked or queued', () => {
+    const low = { tokens: 1_000, limit: 100_000, percent: 1 }
+    const atThreshold = { tokens: 65_000, limit: 100_000, percent: 65 }
+    const aboveThreshold = { tokens: 80_000, limit: 100_000, percent: 80 }
+    expect(shouldAutoCompact(atThreshold, false, false)).toBe(true)
+    expect(shouldAutoCompact(aboveThreshold, false, false)).toBe(true)
+    expect(shouldAutoCompact({ ...atThreshold, percent: 64 }, false, false)).toBe(false)
+    expect(shouldAutoCompact(aboveThreshold, true, false)).toBe(false)
+    expect(shouldAutoCompact(aboveThreshold, false, true)).toBe(false)
+    expect(shouldAutoCompact(low, false, false)).toBe(false)
   })
 })

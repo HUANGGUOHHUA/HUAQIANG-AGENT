@@ -32,7 +32,11 @@ import { cn, deriveTitle, isImagePath, isTextPreviewPath, stripIpcError, uid } f
 import { mergeStats, mergeUsage } from './lib/usage'
 import { compactMessages, parseSlashCommand, sessionMarkdown } from './lib/slash-commands'
 import { createZipBytes } from './lib/zip'
-import { estimateContextUsage, shouldAutoCompact } from './lib/context-usage'
+import {
+  AUTO_COMPACT_PERCENT,
+  estimateContextUsage,
+  shouldAutoCompact
+} from './lib/context-usage'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import ChatHeader from './components/ChatHeader'
@@ -982,7 +986,7 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     if (running || compactBusy || !settings || !activeProfile) return
-    if (!shouldAutoCompact(contextUsage, session.messages.length, autoCompactLockRef.current, queue.length > 0)) {
+    if (!shouldAutoCompact(contextUsage, autoCompactLockRef.current, queue.length > 0)) {
       return
     }
     autoCompactLockRef.current = true
@@ -1104,12 +1108,33 @@ export default function App(): React.JSX.Element {
 
   const submitMessage = (
     text: string,
-    runAttachments: AttachmentPayload[]
+    runAttachments: AttachmentPayload[],
+    skipAutoCompact = false
   ): void => {
     if (!settings) return
     if (!activeProfile || !activeProfile.baseUrl.trim() || !activeProfile.model.trim()) {
       showToast('info', '请先在设置中填写 Base URL 并读取或填写 Model ID')
       openSettings('model')
+      return
+    }
+    if (
+      !skipAutoCompact &&
+      !autoCompactLockRef.current &&
+      contextUsage.percent >= AUTO_COMPACT_PERCENT
+    ) {
+      autoCompactLockRef.current = true
+      showToast(
+        'info',
+        `上下文容量约 ${Math.round(contextUsage.percent)}%，先压缩再发送…`
+      )
+      void compactChat(
+        '发送前自动压缩：保留代码改动、关键决策、错误信息和未完成任务，删除重复的中间过程。'
+      )
+        .catch(() => undefined)
+        .finally(() => {
+          autoCompactLockRef.current = false
+          submitMessage(text, runAttachments, true)
+        })
       return
     }
     const userMessage: AppMessage = {
