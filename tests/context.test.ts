@@ -39,6 +39,21 @@ describe('context compression', () => {
     expect(prepared.messages[prepared.messages.length - 1].content).toContain('第 23 轮回复')
   })
 
+  it('compacts before the hard limit when pressure reaches 65%', () => {
+    const messages: AppMessage[] = []
+    for (let i = 0; i < 2; i += 1) {
+      messages.push(message('user', `第 ${i} 轮需求：` + '实现一个功能。'.repeat(3_000), i * 2))
+      messages.push(message('assistant', `第 ${i} 轮回复：` + '已经完成修改。'.repeat(3_000), i * 2 + 1))
+    }
+    const normal = prepareContext(messages, 100_000, 1_000, '你是编程助手')
+    expect(normal.dropped).toBe(0)
+
+    const pressured = prepareContext(messages, 100_000, 1_000, '你是编程助手', 0.65)
+    expect(pressured.dropped).toBeGreaterThan(0)
+    expect(pressured.messages.length).toBeLessThan(messages.length)
+    expect(pressured.summary).toContain('压缩摘要')
+  })
+
   it('does not collapse a normal session when max output is close to the context window', () => {
     const prepared = prepareContext(
       [
