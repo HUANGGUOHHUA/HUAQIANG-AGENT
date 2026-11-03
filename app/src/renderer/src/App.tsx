@@ -1119,7 +1119,7 @@ export default function App(): React.JSX.Element {
     }
     if (
       !skipAutoCompact &&
-      !autoCompactLockRef.current &&
+      !compactBusy &&
       contextUsage.percent >= AUTO_COMPACT_PERCENT
     ) {
       autoCompactLockRef.current = true
