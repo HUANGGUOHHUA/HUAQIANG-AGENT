@@ -12,7 +12,7 @@
 
 - **本地桌面应用**：Electron + React，不依赖浏览器打开
 - **Agent 工具调用**：文件读写、精确编辑、搜索、PowerShell、系统信息、网页抓取
-- **桌面控制**：识别前台窗口和控件坐标，支持鼠标点击、拖拽、滚轮和键盘输入（需用户确认）
+- **桌面控制**：多显示器识别、平滑鼠标移动、点击、拖拽、滚轮和键盘输入（需用户确认）
 - **多模型配置**：OpenAI 兼容接口 / Anthropic Messages，支持读取 `/models`
 - **流式输出**：思考过程、工具步骤、执行结果实时显示
 - **对话与工作区**：一个工作区对应一个项目，对话记录独立保存
@@ -307,8 +307,8 @@ npm.cmd run installer
 
 ```text
 output/
-  HuaqiangAgent-1.0.4-portable.exe
-  HuaqiangAgent-1.0.4-setup.exe
+  HuaqiangAgent-1.0.5-portable.exe
+  HuaqiangAgent-1.0.5-setup.exe
   win-unpacked/
 ```
 

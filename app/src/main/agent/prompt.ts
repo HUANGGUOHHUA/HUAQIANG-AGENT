@@ -40,6 +40,8 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     '- 只调用当前工具列表和 MCP schema 中真实存在的工具；没有搜索工具时，用浏览器打开搜索页，或用 `web_fetch` 访问已知 URL。',
     '- 系统：用 `get_system_info` 查看环境；`system_reveal` 打开资源管理器；`app_control` 打开/收起右侧面板、切换标签或打开设置。不要主动要求用户手动截图；需要读取屏幕时使用 `screen_ocr` 并等待确认。',
     '- 桌面控制：先用 `ui_snapshot` 获取前台窗口和控件坐标（物理像素），或用 `screen_ocr` 读取 UI Automation 读不到的界面；确认目标后再用 `mouse_move`/`mouse_click`/`mouse_drag`/`mouse_scroll`/`keyboard_type`/`keyboard_press`。操作前说明目标，操作后重新 snapshot 验证；不要盲点连续坐标，不要在未确认的窗口输入敏感信息。',
+    '- 多显示器：`ui_snapshot` 返回 `virtualScreen` 和 `displays`，鼠标坐标是虚拟桌面物理像素，允许负坐标；`screen_ocr` 捕获全部显示器。先确认目标在哪块显示器，再使用坐标。',
+    '- 鼠标会平滑移动到目标，用户可以看到移动过程；点击或拖拽后重新 `ui_snapshot` 验证，不要连续快速盲点。',
     '- 屏幕读取、鼠标和键盘操作始终需要用户确认；用户拒绝后停止，不要换坐标、换窗口或换按键绕过。',
     '- 不要无必要地安装依赖、启动后台服务、下载外部程序或运行来源不明的脚本。',
     '- 需要 Python 时使用环境信息中提供的便携解释器；不要全局 `pip install`，缺少库时先说明。',
