@@ -385,6 +385,27 @@ try {
 Write-Output "$($bounds.X),$($bounds.Y),$($bounds.Width),$($bounds.Height)"
 `
 
+const POST_MOUSE_DELAY_MS = 300
+
+function waitFor(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve()
+      return
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 async function ensureScript(name: string, content: string): Promise<string> {
   const path = join(tmpdir(), `huaqiang-${name}.ps1`)
   await writeFile(path, content, 'utf8')
@@ -520,8 +541,9 @@ export function createDesktopTools(
         additionalProperties: false
       },
       summarize: (args) => `移动鼠标到 (${numberArg(args, 'x', 0, -100_000, 100_000)}, ${numberArg(args, 'y', 0, -100_000, 100_000)})`,
-      execute: async (args) => {
+      execute: async (args, context) => {
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('move', args), 12_000)
+        await waitFor(POST_MOUSE_DELAY_MS, context.signal)
         return { output: '鼠标已移动' }
       }
     },
@@ -548,8 +570,9 @@ export function createDesktopTools(
         const clicks = numberArg(args, 'clicks', 1, 1, 3)
         return `${button === 'right' ? '右键' : button === 'middle' ? '中键' : '左键'}点击 (${numberArg(args, 'x', 0, -100_000, 100_000)}, ${numberArg(args, 'y', 0, -100_000, 100_000)}) ×${clicks}`
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('click', args), 12_000)
+        await waitFor(POST_MOUSE_DELAY_MS, context.signal)
         return { output: '鼠标点击完成' }
       }
     },
@@ -572,8 +595,9 @@ export function createDesktopTools(
         additionalProperties: false
       },
       summarize: (args) => `拖拽 (${numberArg(args, 'x', 0, -100_000, 100_000)}, ${numberArg(args, 'y', 0, -100_000, 100_000)}) → (${numberArg(args, 'to_x', 0, -100_000, 100_000)}, ${numberArg(args, 'to_y', 0, -100_000, 100_000)})`,
-      execute: async (args) => {
+      execute: async (args, context) => {
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('drag', args), 15_000)
+        await waitFor(POST_MOUSE_DELAY_MS, context.signal)
         return { output: '鼠标拖拽完成' }
       }
     },
@@ -595,9 +619,10 @@ export function createDesktopTools(
         additionalProperties: false
       },
       summarize: (args) => `滚动滚轮 ${numberArg(args, 'amount', 0, -20, 20)} 格`,
-      execute: async (args) => {
+      execute: async (args, context) => {
         if (numberArg(args, 'amount', 0, -20, 20) === 0) throw new ToolError('amount 不能为 0')
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('scroll', args), 12_000)
+        await waitFor(POST_MOUSE_DELAY_MS, context.signal)
         return { output: '滚轮操作完成' }
       }
     },

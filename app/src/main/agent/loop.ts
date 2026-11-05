@@ -56,9 +56,9 @@ const MIN_CONTEXT_WINDOW = 8_000
 const MAX_CONTEXT_WINDOW = 2_000_000
 const CONTEXT_SAFETY_TOKENS = 2_048
 const MAX_TOOL_RESULT_CHARS = 30_000
-// Screen reading and input injection always need an explicit user decision,
-// even when the session is in automatic approval mode.
-const ALWAYS_APPROVE_TOOLS = new Set([
+// One approval unlocks this desktop-control set for the current run. The user
+// must still be able to abort it with ESC at any time.
+const DESKTOP_TOOLS = new Set([
   'ui_snapshot',
   'screen_ocr',
   'mouse_move',
@@ -345,6 +345,8 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
   if (!history.length) return finishError('没有可发送的消息。')
 
   const stepLimit = options.maxSteps > 0 ? options.maxSteps : Number.POSITIVE_INFINITY
+  let desktopControlApproved = false
+  let desktopControlDenied = false
   for (let step = 0; step < stepLimit; step++) {
     if (signal.aborted) return finishAborted()
 
@@ -577,10 +579,28 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
         continue
       }
 
-      if (
-        (options.approvalMode === 'ask' && definition.risk !== 'read') ||
-        ALWAYS_APPROVE_TOOLS.has(definition.name)
-      ) {
+      const isDesktopTool = DESKTOP_TOOLS.has(definition.name)
+      if (isDesktopTool && desktopControlDenied) {
+        call.status = 'denied'
+        call.isError = true
+        call.result = '用户已拒绝屏幕接管。本次任务不再尝试桌面操作。'
+        call.endedAt = Date.now()
+        emit({
+          type: 'tool-end',
+          runId,
+          messageId,
+          callId: call.id,
+          status: 'denied',
+          result: call.result,
+          isError: true
+        })
+        continue
+      }
+
+      const needsDesktopApproval = isDesktopTool && !desktopControlApproved
+      const needsNormalApproval =
+        !isDesktopTool && options.approvalMode === 'ask' && definition.risk !== 'read'
+      if (needsDesktopApproval || needsNormalApproval) {
         let summary = call.name
         try {
           summary = definition.summarize(call.args)
@@ -590,11 +610,13 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
         const request: ApprovalRequest = {
           id: crypto.randomUUID(),
           runId,
-          toolName: call.name,
-          displayName: definition.displayName,
-          risk: definition.risk,
-          summary,
-          preview: approvalPreview(call.args)
+          toolName: needsDesktopApproval ? 'desktop_control' : call.name,
+          displayName: needsDesktopApproval ? '接管屏幕和鼠标' : definition.displayName,
+          risk: needsDesktopApproval ? 'exec' : definition.risk,
+          summary: needsDesktopApproval
+            ? '允许 Agent 接管鼠标和屏幕进行自动化操作。按 ESC 可随时停止。'
+            : summary,
+          preview: needsDesktopApproval ? '' : approvalPreview(call.args)
         }
         let decision: ApprovalDecision = 'deny'
         try {
@@ -618,9 +640,12 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
           continue
         }
         if (decision === 'deny') {
+          if (needsDesktopApproval) desktopControlDenied = true
           call.status = 'denied'
           call.isError = true
-          call.result = '用户拒绝执行此项操作。请说明原因，不要重复尝试；可以提出替代方案。'
+          call.result = needsDesktopApproval
+            ? '用户拒绝屏幕接管。本次任务不再执行桌面操作；需要时请让用户重新发起。'
+            : '用户拒绝执行此项操作。请说明原因，不要重复尝试；可以提出替代方案。'
           call.endedAt = Date.now()
           emit({
             type: 'tool-end',
@@ -632,6 +657,14 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
             isError: true
           })
           continue
+        }
+        if (needsDesktopApproval) {
+          desktopControlApproved = true
+          emit({
+            type: 'notice',
+            runId,
+            message: '屏幕接管已开启，鼠标会平滑跟随；按 ESC 可随时停止。'
+          })
         }
       }
 

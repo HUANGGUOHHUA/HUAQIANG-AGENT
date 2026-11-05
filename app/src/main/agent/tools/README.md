@@ -11,4 +11,4 @@ Agent 工具集合。
 - `mouse_move` / `mouse_click` / `mouse_drag` / `mouse_scroll`
 - `keyboard_type` / `keyboard_press`
 
-屏幕读取和输入注入始终要求用户确认，即使用户选择了自动执行。
+首次桌面操作会请求一次“接管屏幕和鼠标”的确认；批准后本轮桌面操作直接执行。用户按 ESC 可随时中止任务。

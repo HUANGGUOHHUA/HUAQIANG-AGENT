@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   protocol,
@@ -727,6 +728,21 @@ function registerIpc(): void {
     const sessionId = typeof input.sessionId === 'string' ? input.sessionId : 'default'
     const controller = new AbortController()
     activeRuns.set(runId, { controller, sessionId })
+    // ESC is a panic stop while an agent run owns the desktop. Register it only
+    // for the lifetime of the run so it does not steal Escape from other apps.
+    let escapeRegistered = false
+    try {
+      if (!globalShortcut.isRegistered('Escape')) {
+        escapeRegistered = globalShortcut.register('Escape', () => {
+          for (const [id, run] of activeRuns) {
+            run.controller.abort()
+            approvalService.cancelRun(id)
+          }
+        })
+      }
+    } catch {
+      escapeRegistered = false
+    }
     const sender = event.sender
     const onDestroyed = (): void => {
       controller.abort()
@@ -901,6 +917,13 @@ function registerIpc(): void {
       activeRuns.delete(runId)
       approvalService.cancelRun(runId)
       sender.removeListener('destroyed', onDestroyed)
+      if (escapeRegistered) {
+        try {
+          globalShortcut.unregister('Escape')
+        } catch {
+          // The app may be shutting down; unregister must not mask the result.
+        }
+      }
     }
   })
 
