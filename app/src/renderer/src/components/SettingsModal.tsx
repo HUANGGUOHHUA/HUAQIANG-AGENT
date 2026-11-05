@@ -308,6 +308,7 @@ export default function SettingsModal({
   const [confirmAuto, setConfirmAuto] = useState(false)
   const [elevateState, setElevateState] = useState<'idle' | 'working' | 'denied'>('idle')
   const [maxSteps, setMaxSteps] = useState(settings.maxSteps)
+  const [networkLocked, setNetworkLocked] = useState(settings.networkLocked)
   const [extra, setExtra] = useState(settings.systemPromptExtra)
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(settings.mcpServers)
   const [pythonStatus, setPythonStatus] = useState<PythonStatus | null>(null)
@@ -567,6 +568,7 @@ export default function SettingsModal({
       agentElevated,
       approvalMode,
       maxSteps,
+      networkLocked,
       mcpServers,
       systemPromptExtra: extra,
       apiKeys
@@ -991,6 +993,21 @@ export default function SettingsModal({
                   <p>
                     开启后每次启动应用都会弹出 Windows UAC 授权弹窗。管理员模式下 Windows
                     会阻止从资源管理器拖入文件，可改用 Ctrl+V 或「+ → 上传文件」。
+                  </p>
+                </div>
+
+                <div className="settings-block">
+                  <h3>断网锁</h3>
+                  <label className="settings-toggle">
+                    <input
+                      type="checkbox"
+                      checked={networkLocked}
+                      onChange={(event) => setNetworkLocked(event.target.checked)}
+                    />
+                    <span>禁止本程序发起任何网络请求</span>
+                  </label>
+                  <p>
+                    开启后模型调用、网页抓取、联网 MCP、模型列表和压缩摘要都会被拒绝；关闭后恢复。不会关闭网卡，不影响其他软件。
                   </p>
                 </div>
 

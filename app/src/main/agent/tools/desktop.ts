@@ -77,22 +77,27 @@ public static class HqMouse
     public static void Click(int x, int y, string button, int clicks, int duration)
     {
         MoveTo(x, y, duration);
+        // Human-like settle before pressing, with a held click instead of a
+        // nearly instant down/up pair.
+        Thread.Sleep(140);
         uint down = LEFTDOWN, up = LEFTUP;
         if (string.Equals(button, "right", StringComparison.OrdinalIgnoreCase)) { down = RIGHTDOWN; up = RIGHTUP; }
         else if (string.Equals(button, "middle", StringComparison.OrdinalIgnoreCase)) { down = MIDDLEDOWN; up = MIDDLEUP; }
         for (int i = 0; i < clicks; i++)
         {
             mouse_event(down, 0, 0, 0, UIntPtr.Zero);
-            Thread.Sleep(20);
+            Thread.Sleep(90);
             mouse_event(up, 0, 0, 0, UIntPtr.Zero);
-            Thread.Sleep(60);
+            Thread.Sleep(i + 1 < clicks ? 110 : 100);
         }
     }
 
     public static void Drag(int x1, int y1, int x2, int y2, int duration)
     {
         MoveTo(x1, y1, duration);
+        Thread.Sleep(160);
         mouse_event(LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(120);
         int steps = Math.Max(16, Math.Min(120, duration / 12));
         for (int i = 1; i <= steps; i++)
         {
@@ -104,6 +109,7 @@ public static class HqMouse
             Thread.Sleep(Math.Max(4, duration / steps));
         }
         SetCursorPos(x2, y2);
+        Thread.Sleep(120);
         mouse_event(LEFTUP, 0, 0, 0, UIntPtr.Zero);
     }
 
@@ -454,8 +460,14 @@ function mouseArgs(action: string, args: Record<string, unknown>): string[] {
   ]
 }
 
+export interface DesktopToolOptions {
+  suspendOverlay?: () => void
+  resumeOverlay?: () => void
+}
+
 export function createDesktopTools(
-  getWindow: () => BrowserWindow | null
+  getWindow: () => BrowserWindow | null,
+  options: DesktopToolOptions = {}
 ): ToolDefinition[] {
   return [
     {
@@ -487,6 +499,7 @@ export function createDesktopTools(
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       summarize: () => '截取全部显示器并识别文字',
       execute: async () => {
+        options.suspendOverlay?.()
         const win = getWindow()
         const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible())
         if (wasVisible) win!.hide()
@@ -505,6 +518,7 @@ export function createDesktopTools(
             win.show()
             win.focus()
           }
+          options.resumeOverlay?.()
         }
         try {
           const text = await ocrImage(path)

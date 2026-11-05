@@ -51,6 +51,12 @@ import { setToolTempBase } from './child-env'
 import { AgentWorkerBridge } from './worker-bridge'
 import { createBrowserTools, createAppControlTool } from './agent/tools/browser'
 import { createDesktopTools } from './agent/tools/desktop'
+import {
+  hideControlOverlay,
+  resumeControlOverlay,
+  showControlOverlay,
+  suspendControlOverlay
+} from './control-overlay'
 import { registerScreenshotIpc } from './screenshot'
 import { testProfileConnection, listProfileModels } from './profile-test'
 import { SessionStore } from './sessions'
@@ -158,6 +164,8 @@ let browserBridge: BrowserBridge
 let appBridge: BrowserBridge
 let agentWorker: AgentWorkerBridge | null = null
 const activeRuns = new Map<string, { controller: AbortController; sessionId: string }>()
+const NETWORK_LOCKED_ERROR =
+  '断网锁已开启：本程序已被禁止发起网络请求。请在设置中关闭断网锁后重试。'
 
 function iconPath(): string {
   return app.isPackaged
@@ -384,7 +392,11 @@ function registerIpc(): void {
 
   ipcMain.handle('settings:save', (_event, input: SettingsSaveInput) => {
     const settings = settingsStore.save(input)
-    void mcpManager.sync(settingsStore.getRaw().mcpServers)
+    if (settings.networkLocked) {
+      void mcpManager.closeAll()
+    } else {
+      void mcpManager.sync(settingsStore.getRaw().mcpServers)
+    }
     return settings
   })
 
@@ -400,6 +412,9 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('profile:test', async (_event, input: ProfileTestInput) => {
+    if (settingsStore.getRaw().networkLocked) {
+      return { ok: false, message: NETWORK_LOCKED_ERROR }
+    }
     if (!input?.profile) return { ok: false, message: '配置为空' }
     let apiKey = ''
     if (input.apiKey === undefined) {
@@ -411,6 +426,9 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('profile:models', async (_event, input: ProfileTestInput) => {
+    if (settingsStore.getRaw().networkLocked) {
+      return { ok: false, message: NETWORK_LOCKED_ERROR }
+    }
     if (!input?.profile) return { ok: false, message: '配置为空' }
     let apiKey = ''
     if (input.apiKey === undefined) {
@@ -547,8 +565,16 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('mcp:statuses', () => mcpManager.statuses())
-  ipcMain.handle('mcp:restart', () => mcpManager.sync(settingsStore.getRaw().mcpServers))
-  ipcMain.handle('mcp:test', (_event, config: McpServerConfig) => mcpManager.test(config))
+  ipcMain.handle('mcp:restart', () => {
+    if (settingsStore.getRaw().networkLocked) return mcpManager.statuses()
+    return mcpManager.sync(settingsStore.getRaw().mcpServers)
+  })
+  ipcMain.handle('mcp:test', (_event, config: McpServerConfig) => {
+    if (settingsStore.getRaw().networkLocked) {
+      return { ok: false, message: NETWORK_LOCKED_ERROR, tools: [] }
+    }
+    return mcpManager.test(config)
+  })
 
   ipcMain.handle('app:openExternal', async (_event, url: string) => {
     if (typeof url !== 'string') return
@@ -632,6 +658,9 @@ function registerIpc(): void {
     async (_event, input: CompactRequest): Promise<CompactResult> => {
       if (!input || !Array.isArray(input.messages)) {
         return { ok: false, error: '请求格式不正确' }
+      }
+      if (settingsStore.getRaw().networkLocked) {
+        return { ok: false, error: NETWORK_LOCKED_ERROR }
       }
       if (activeRuns.size > 0) {
         return { ok: false, error: '当前有任务正在运行，请稍后再压缩' }
@@ -721,6 +750,9 @@ function registerIpc(): void {
   ipcMain.handle('agent:run', async (event, input: AgentRunRequest): Promise<AgentRunResult> => {    if (!input || typeof input !== 'object' || !Array.isArray(input.messages)) {
       return { ok: false, error: '请求格式不正确' }
     }
+    if (settingsStore.getRaw().networkLocked) {
+      return { ok: false, error: NETWORK_LOCKED_ERROR }
+    }
     if (activeRuns.size > 0) {
       return { ok: false, error: '已有任务正在运行，请先停止或等待完成。' }
     }
@@ -734,6 +766,7 @@ function registerIpc(): void {
     try {
       if (!globalShortcut.isRegistered('Escape')) {
         escapeRegistered = globalShortcut.register('Escape', () => {
+          hideControlOverlay()
           for (const [id, run] of activeRuns) {
             run.controller.abort()
             approvalService.cancelRun(id)
@@ -781,7 +814,10 @@ function registerIpc(): void {
         ...localOrProxied,
         ...createBrowserTools(browserBridge, () => mainWindow),
         createAppControlTool(appBridge, () => mainWindow),
-        ...createDesktopTools(() => mainWindow)
+        ...createDesktopTools(() => mainWindow, {
+          suspendOverlay: suspendControlOverlay,
+          resumeOverlay: resumeControlOverlay
+        })
       ]
       let mcpTools: ToolDefinition[] = []
       try {
@@ -889,6 +925,12 @@ function registerIpc(): void {
         signal: controller.signal,
         emit: (payload) => {
           if (!sender.isDestroyed()) sender.send('agent:event', payload)
+          if (
+            payload.type === 'notice' &&
+            payload.message.includes('屏幕接管已开启')
+          ) {
+            showControlOverlay()
+          }
         },
         requestApproval: (request) => approvalService.request(request, sessionId, sender)
       })
@@ -917,6 +959,7 @@ function registerIpc(): void {
       activeRuns.delete(runId)
       approvalService.cancelRun(runId)
       sender.removeListener('destroyed', onDestroyed)
+      hideControlOverlay()
       if (escapeRegistered) {
         try {
           globalShortcut.unregister('Escape')
@@ -1334,7 +1377,9 @@ async function bootstrap(): Promise<void> {
     void startAgentWorker()
   }
 
-  void mcpManager.sync(settingsStore.getRaw().mcpServers)
+  if (!settingsStore.getRaw().networkLocked) {
+    void mcpManager.sync(settingsStore.getRaw().mcpServers)
+  }
   void builtinMcp
     ?.start()
     .then((transport) =>

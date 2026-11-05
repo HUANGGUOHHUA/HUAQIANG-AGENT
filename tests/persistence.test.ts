@@ -42,6 +42,7 @@ describe('settings persistence', () => {
     const defaults = store.getPublic()
     expect(defaults.activeProfileId).toBe('custom')
     expect(defaults.maxSteps).toBe(0)
+    expect(defaults.networkLocked).toBe(false)
     expect(defaults.profiles[0]).toMatchObject({
       id: 'custom',
       name: '通用接口',
@@ -74,6 +75,7 @@ describe('settings persistence', () => {
       workspace,
       approvalMode: 'auto',
       maxSteps: 30,
+      networkLocked: true,
       mcpServers: [],
       systemPromptExtra: '项目规范'
     })
@@ -86,6 +88,7 @@ describe('settings persistence', () => {
     expect(publicSettings.profiles[0].contextWindow).toBe(128000)
     expect(publicSettings.workspace).toBe(workspace)
     expect(publicSettings.approvalMode).toBe('auto')
+    expect(publicSettings.networkLocked).toBe(true)
     expect(publicSettings.systemPromptExtra).toBe('项目规范')
   })
 

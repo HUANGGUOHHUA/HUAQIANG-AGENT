@@ -189,6 +189,7 @@ export interface UiSettings {
   agentElevated: boolean
   approvalMode: ApprovalMode
   maxSteps: number
+  networkLocked: boolean
   mcpServers: McpServerConfig[]
   systemPromptExtra: string
   encryptionAvailable: boolean
@@ -202,6 +203,7 @@ export interface SettingsSaveInput {
   agentElevated?: boolean
   approvalMode: ApprovalMode
   maxSteps: number
+  networkLocked?: boolean
   mcpServers: McpServerConfig[]
   systemPromptExtra: string
   apiKeys?: Record<string, string | null>

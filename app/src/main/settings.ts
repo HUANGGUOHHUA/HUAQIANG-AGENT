@@ -23,6 +23,7 @@ interface StoredSettings {
   agentElevated: boolean
   approvalMode: 'ask' | 'auto'
   maxSteps: number
+  networkLocked: boolean
   mcpServers: McpServerConfig[]
   systemPromptExtra: string
 }
@@ -90,6 +91,7 @@ function defaults(): StoredSettings {
     agentElevated: false,
     approvalMode: 'ask',
     maxSteps: 0,
+    networkLocked: false,
     mcpServers: [],
     systemPromptExtra: ''
   }
@@ -231,6 +233,7 @@ export class SettingsStore {
           agentElevated: raw.agentElevated === true,
           approvalMode: raw.approvalMode === 'auto' ? 'auto' : 'ask',
           maxSteps: Math.max(0, Math.round(clampNumber(raw.maxSteps, 0, Number.MAX_SAFE_INTEGER, 0))),
+          networkLocked: raw.networkLocked === true,
           mcpServers: cleanMcpServers(raw.mcpServers),
           systemPromptExtra: cleanString(raw.systemPromptExtra, 20000)
         }
@@ -269,6 +272,7 @@ export class SettingsStore {
       agentElevated: this.data.agentElevated,
       approvalMode: this.data.approvalMode,
       maxSteps: this.data.maxSteps,
+      networkLocked: this.data.networkLocked,
       mcpServers: this.data.mcpServers,
       systemPromptExtra: this.data.systemPromptExtra,
       encryptionAvailable: safeStorage.isEncryptionAvailable()
@@ -387,6 +391,7 @@ export class SettingsStore {
       agentElevated: input.agentElevated === true,
       approvalMode: input.approvalMode === 'auto' ? 'auto' : 'ask',
       maxSteps: Math.max(0, Math.round(clampNumber(input.maxSteps, 0, Number.MAX_SAFE_INTEGER, 0))),
+      networkLocked: input.networkLocked === true,
       mcpServers: cleanMcpServers(input.mcpServers),
       systemPromptExtra: cleanString(input.systemPromptExtra, 20000)
     }
