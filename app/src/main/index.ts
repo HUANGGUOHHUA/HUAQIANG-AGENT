@@ -49,6 +49,7 @@ import { BrowserBridge } from './browser-bridge'
 import { setToolTempBase } from './child-env'
 import { AgentWorkerBridge } from './worker-bridge'
 import { createBrowserTools, createAppControlTool } from './agent/tools/browser'
+import { createDesktopTools } from './agent/tools/desktop'
 import { registerScreenshotIpc } from './screenshot'
 import { testProfileConnection, listProfileModels } from './profile-test'
 import { SessionStore } from './sessions'
@@ -763,7 +764,8 @@ function registerIpc(): void {
       const coreTools: ToolDefinition[] = [
         ...localOrProxied,
         ...createBrowserTools(browserBridge, () => mainWindow),
-        createAppControlTool(appBridge, () => mainWindow)
+        createAppControlTool(appBridge, () => mainWindow),
+        ...createDesktopTools(() => mainWindow)
       ]
       let mcpTools: ToolDefinition[] = []
       try {

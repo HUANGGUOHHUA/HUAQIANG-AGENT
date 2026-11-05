@@ -56,6 +56,18 @@ const MIN_CONTEXT_WINDOW = 8_000
 const MAX_CONTEXT_WINDOW = 2_000_000
 const CONTEXT_SAFETY_TOKENS = 2_048
 const MAX_TOOL_RESULT_CHARS = 30_000
+// Screen reading and input injection always need an explicit user decision,
+// even when the session is in automatic approval mode.
+const ALWAYS_APPROVE_TOOLS = new Set([
+  'ui_snapshot',
+  'screen_ocr',
+  'mouse_move',
+  'mouse_click',
+  'mouse_drag',
+  'mouse_scroll',
+  'keyboard_type',
+  'keyboard_press'
+])
 
 function estimateTokens(text: string): number {
   if (!text) return 0
@@ -565,7 +577,10 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
         continue
       }
 
-      if (options.approvalMode === 'ask' && definition.risk !== 'read') {
+      if (
+        (options.approvalMode === 'ask' && definition.risk !== 'read') ||
+        ALWAYS_APPROVE_TOOLS.has(definition.name)
+      ) {
         let summary = call.name
         try {
           summary = definition.summarize(call.args)

@@ -56,7 +56,7 @@ export function estimateContextUsage(input: ContextUsageInput): ContextUsage {
     1_250 +
     estimateTextTokens(input.systemPromptExtra) +
     estimateTextTokens(input.contextSummary)
-  const toolTokens = 7_200
+  const toolTokens = 10_000
 
   let messageTokens = 0
   for (const message of input.messages) {
