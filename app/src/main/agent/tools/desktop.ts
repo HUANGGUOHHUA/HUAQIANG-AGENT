@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import type { BrowserWindow } from 'electron'
+import { detectEdges } from '../../attachments/edges'
 import { ocrImage, ocrImageBoxes } from '../../attachments/ocr'
 import type { ToolDefinition } from './types'
 import { ToolError, boolArg, numberArg, stringArg, truncate } from './types'
@@ -582,6 +583,7 @@ export interface DesktopToolOptions {
   suspendOverlay?: () => void
   resumeOverlay?: () => void
   highlight?: (target: { x: number; y: number; width?: number; height?: number; label?: string }) => void
+  pythonPath?: () => string
 }
 
 export function createDesktopTools(
@@ -755,6 +757,58 @@ export function createDesktopTools(
           }
         } finally {
           await unlink(path).catch(() => undefined)
+        }
+      }
+    },
+    {
+      name: 'screen_edges',
+      displayName: '检测屏幕控件边缘',
+      risk: 'read',
+      description:
+        '截取虚拟桌面并做本地边缘检测，返回可见矩形控件的边缘外框（x/y/width/height/center）。适合 Canvas、自绘按钮、远程桌面等 UI Automation/DOM 读不到边界的界面；普通按钮优先 ui_snapshot 或 browser_snapshot。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          min_width: { type: 'number', description: '最小控件宽度，默认 20' },
+          min_height: { type: 'number', description: '最小控件高度，默认 12' },
+          max_boxes: { type: 'number', description: '最多返回多少个矩形，默认 40，最大 80' }
+        },
+        additionalProperties: false
+      },
+      summarize: () => '检测屏幕控件边缘',
+      execute: async (args) => {
+        const shot = await captureVirtualScreen()
+        try {
+          const result = await detectEdges(shot.path, {
+            pythonPath: options.pythonPath?.(),
+            minWidth: numberArg(args, 'min_width', 20, 4, 2000),
+            minHeight: numberArg(args, 'min_height', 12, 4, 2000),
+            maxBoxes: numberArg(args, 'max_boxes', 40, 1, 80)
+          })
+          const boxes = result.boxes.map((box) => ({
+            ...box,
+            x: shot.bounds.x + box.x,
+            y: shot.bounds.y + box.y,
+            centerX: shot.bounds.x + box.centerX,
+            centerY: shot.bounds.y + box.centerY
+          }))
+          return {
+            output: truncate(
+              JSON.stringify(
+                {
+                  screen: shot.bounds,
+                  width: result.width,
+                  height: result.height,
+                  boxes
+                },
+                null,
+                2
+              ),
+              40_000
+            )
+          }
+        } finally {
+          await unlink(shot.path).catch(() => undefined)
         }
       }
     },

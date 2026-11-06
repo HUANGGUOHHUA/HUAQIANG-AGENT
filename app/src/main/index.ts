@@ -895,7 +895,12 @@ function registerIpc(): void {
         ...createDesktopTools(() => mainWindow, {
           suspendOverlay: suspendControlOverlay,
           resumeOverlay: resumeControlOverlay,
-          highlight: highlightControl
+          highlight: highlightControl,
+          pythonPath: () =>
+            pythonEnv.currentPythonPath() ||
+            (app.isPackaged
+              ? join(process.resourcesPath, 'runtime', 'python', 'python.exe')
+              : 'python.exe')
         })
       ]
       let mcpTools: ToolDefinition[] = []
