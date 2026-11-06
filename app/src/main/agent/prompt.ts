@@ -44,7 +44,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     '- 浏览器视觉：优先 DOM 控件；Canvas、图片或自绘控件读不到时，模型支持图片输入再用 `browser_vision`，视觉结果只作补充。',
     '- 公文标题：用 `browser_document_title` 读取（支持同源 iframe）并清理 Windows 非法字符；直接使用返回的 `formatted` 填表、`zipName` 重命名压缩包，不要自行改写或猜标题。',
     '- 下载：点击“批量下载”成功不等于文件已下载完成。必须检查实际下载文件，确认大小大于 0 且文件稳定后再重命名；未确认前不要汇报下载成功。',
-    '- 桌面识别：目标文字明确时直接用 `ui_click(name=...)`；UI Automation 读不到时用 `screen_click(text=...)`，一次完成截图、OCR 和点击。只有不知道目标时才 `ui_snapshot`/`screen_ocr`。',
+    '- 桌面识别：目标名称明确时直接用 `ui_click(name=...)`；它找不到 UI Automation 控件时会自动截屏 OCR 并点击相同文字，不需要模型自己切换工具。只有需要直接按屏幕文字定位时再用 `screen_click(text=...)`。',
     '- 验证：普通点击后不必重新 snapshot；只有打开新页面、弹窗、窗口切换、页面明显变化或结果不确定时才重新读取。检查返回值、高亮位置和页面状态即可。',
     '- 接管：首次桌面操作请求一次“接管屏幕和鼠标”的确认；批准后本轮直接执行。用户按 ESC 会中止整个任务；用户拒绝后不要换坐标、换窗口或换按键绕过。',
     '- 多显示器：鼠标坐标是虚拟桌面物理像素，允许负坐标；用 `virtualScreen`/`displays` 先确认目标屏幕。',

@@ -619,6 +619,48 @@ export function createDesktopTools(
     }
   }
 
+  const clickScreenText = async (
+    text: string,
+    args: Record<string, unknown>,
+    context: { signal: AbortSignal }
+  ): Promise<{ output: string }> => {
+    const shot = await captureVirtualScreen()
+    try {
+      const ocr = await ocrImageBoxes(shot.path)
+      const normalize = (value: string): string => value.replace(/\s+/g, '').toLowerCase()
+      const wanted = normalize(text)
+      const candidates = ocr.lines.filter((line) => normalize(line.text).includes(wanted))
+      const line = candidates[0]
+      if (!line) {
+        const sample = ocr.lines
+          .slice(0, 10)
+          .map((item) => item.text)
+          .join('、')
+        throw new ToolError(`没有找到文字「${text}」${sample ? `。屏幕文字：${sample}` : ''}`)
+      }
+      const x = Math.round(shot.bounds.x + line.x + line.width / 2)
+      const y = Math.round(shot.bounds.y + line.y + line.height / 2)
+      options.highlight?.({
+        x,
+        y,
+        width: line.width,
+        height: line.height,
+        label: line.text
+      })
+      await runPowerShell(
+        'desktop-mouse',
+        MOUSE_SCRIPT,
+        mouseArgs('click', { ...args, x, y }),
+        12_000
+      )
+      await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+      uiCache = null
+      return { output: `已通过屏幕文字点击「${line.text}」中心 (${x}, ${y})` }
+    } finally {
+      await unlink(shot.path).catch(() => undefined)
+    }
+  }
+
   return [
     {
       name: 'ui_snapshot',
@@ -716,42 +758,7 @@ export function createDesktopTools(
       execute: async (args, context) => {
         const text = stringArg(args, 'text', { required: true, max: 200 }).trim()
         if (!text) throw new ToolError('text 不能为空')
-        const shot = await captureVirtualScreen()
-        try {
-          const ocr = await ocrImageBoxes(shot.path)
-          const normalize = (value: string): string =>
-            value.replace(/\s+/g, '').toLowerCase()
-          const wanted = normalize(text)
-          const candidates = ocr.lines.filter((line) => normalize(line.text).includes(wanted))
-          const line = candidates[0]
-          if (!line) {
-            const sample = ocr.lines
-              .slice(0, 10)
-              .map((item) => item.text)
-              .join('、')
-            throw new ToolError(`没有找到文字「${text}」${sample ? `。屏幕文字：${sample}` : ''}`)
-          }
-          const x = Math.round(shot.bounds.x + line.x + line.width / 2)
-          const y = Math.round(shot.bounds.y + line.y + line.height / 2)
-          options.highlight?.({
-            x,
-            y,
-            width: line.width,
-            height: line.height,
-            label: line.text
-          })
-          await runPowerShell(
-            'desktop-mouse',
-            MOUSE_SCRIPT,
-            mouseArgs('click', { ...args, x, y }),
-            12_000
-          )
-          await waitFor(POST_MOUSE_DELAY_MS, context.signal)
-          uiCache = null
-          return { output: `已点击文字「${line.text}」中心 (${x}, ${y})` }
-        } finally {
-          await unlink(shot.path).catch(() => undefined)
-        }
+        return clickScreenText(text, args, context)
       }
     },
     {
@@ -759,7 +766,7 @@ export function createDesktopTools(
       displayName: '识别并点击',
       risk: 'exec',
       description:
-        '按名称、id 或类型点击 UI Automation 控件中心。名称明确时直接 ui_click(name="批量下载")，不必先 ui_snapshot；只有不知道目标时才先读取。id 最稳定，name 支持包含匹配，index 只对最近一次快照有效。',
+        '按名称、id 或类型点击控件中心。名称明确时直接 ui_click(name="批量下载")，不必先 ui_snapshot；UI Automation 找不到时会自动截屏 OCR，找到相同文字后点击。id 最稳定，name 支持包含匹配，index 只对最近一次快照有效。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -802,17 +809,32 @@ export function createDesktopTools(
           items = await refresh()
           item = pickUiItem(items, args)
         }
-        if (!items.length) {
-          throw new ToolError('没有识别到可点击的窗口或控件')
-        }
-        if (!item) {
+        if (!items.length || !item) {
+          const name = stringArg(args, 'name').trim()
+          if (name) {
+            try {
+              const fallback = await clickScreenText(name, args, context)
+              return { output: `UI Automation 未找到，${fallback.output}` }
+            } catch (screenError) {
+              const names = items
+                .filter((entry) => entry.kind === 'control')
+                .slice(0, 12)
+                .map((entry) => `${entry.type ?? '控件'}:${entry.name ?? ''}`)
+                .join('；')
+              const detail =
+                screenError instanceof Error ? screenError.message : String(screenError)
+              throw new ToolError(
+                `没有找到匹配的控件${names ? `。可用控件：${names}` : ''}；屏幕识别也未找到：${detail}`
+              )
+            }
+          }
           const names = items
             .filter((entry) => entry.kind === 'control')
             .slice(0, 12)
             .map((entry) => `${entry.type ?? '控件'}:${entry.name ?? ''}`)
             .join('；')
           throw new ToolError(
-            `没有找到匹配的控件。可用控件：${names || '（无）'}`
+            `没有找到匹配的控件${names ? `。可用控件：${names}` : ''}`
           )
         }
         const x = Math.round(Number(item.x ?? 0) + Number(item.width ?? 0) / 2)
@@ -876,7 +898,7 @@ export function createDesktopTools(
       displayName: '点击鼠标',
       risk: 'exec',
       description:
-        '在屏幕坐标 (x, y) 点击鼠标。鼠标会先平滑移动到目标，再执行点击。button 可选 left/right/middle，clicks 可选 1-3（双击传 2）。点击前先用 ui_snapshot 或 screen_ocr 确认位置。',
+        '在屏幕坐标 (x, y) 点击鼠标，坐标已知时直接使用。鼠标会先平滑移动到目标，再执行点击。button 可选 left/right/middle，clicks 可选 1-3（双击传 2）。',
       inputSchema: {
         type: 'object',
         properties: {
