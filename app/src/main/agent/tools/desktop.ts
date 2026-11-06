@@ -306,6 +306,7 @@ foreach ($window in $windows) {
     $windowName = $window.Current.Name
     $handle = $window.Current.NativeWindowHandle
     $items += [pscustomobject]@{
+      index = $items.Count
       kind = 'window'
       name = $windowName
       type = 'Window'
@@ -328,6 +329,7 @@ foreach ($window in $windows) {
         $crect = Get-Rect $child
         if ($null -eq $crect) { continue }
         $items += [pscustomobject]@{
+          index = $items.Count
           kind = 'control'
           window = $windowName
           name = $name
@@ -446,6 +448,50 @@ async function runPowerShell(
   }
 }
 
+interface UiSnapshotItem {
+  index?: number
+  kind?: string
+  name?: string
+  type?: string
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+}
+
+function parseUiItems(output: string): UiSnapshotItem[] {
+  try {
+    const parsed = JSON.parse(output) as { items?: unknown }
+    return Array.isArray(parsed.items) ? (parsed.items as UiSnapshotItem[]) : []
+  } catch {
+    return []
+  }
+}
+
+function pickUiItem(
+  items: UiSnapshotItem[],
+  args: Record<string, unknown>
+): UiSnapshotItem | null {
+  const index = numberArg(args, 'index', -1, -1, 100_000)
+  if (index >= 0) {
+    return items.find((item) => item.index === index) ?? null
+  }
+  const wantedName = stringArg(args, 'name').trim().toLowerCase()
+  const wantedType = stringArg(args, 'type').trim().toLowerCase()
+  if (!wantedName && !wantedType) return null
+  const candidates = items.filter((item) => {
+    if (item.kind !== 'control') return false
+    if (wantedType && String(item.type ?? '').toLowerCase() !== wantedType) return false
+    if (!wantedName) return true
+    return String(item.name ?? '').toLowerCase().includes(wantedName)
+  })
+  if (!candidates.length) return null
+  return (
+    candidates.find((item) => String(item.name ?? '').toLowerCase() === wantedName) ??
+    candidates[0]
+  )
+}
+
 function mouseArgs(action: string, args: Record<string, unknown>): string[] {
   return [
     '-Action', action,
@@ -535,6 +581,74 @@ export function createDesktopTools(
           }
         } finally {
           await unlink(path).catch(() => undefined)
+        }
+      }
+    },
+    {
+      name: 'ui_click',
+      displayName: '识别并点击',
+      risk: 'exec',
+      description:
+        '先用 UI Automation 识别界面，再点击匹配的控件中心。优先使用这个工具，而不是手动填坐标。可以按 index（ui_snapshot 返回的编号）、控件名称 name，或控件类型 type 选择目标；name 支持包含匹配。点击后会自动等待并返回实际点击位置。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'ui_snapshot 返回的控件编号，优先级最高' },
+          name: { type: 'string', description: '控件名称，支持包含匹配，例如“保存”' },
+          type: { type: 'string', description: '控件类型，例如 Button、Edit、MenuItem' },
+          button: { type: 'string', enum: ['left', 'right', 'middle'], description: '鼠标按键，默认 left' },
+          clicks: { type: 'number', description: '点击次数，1-3，默认 1' },
+          duration_ms: { type: 'number', description: '平滑移动到控件的时长，默认 320 毫秒' }
+        },
+        additionalProperties: false
+      },
+      summarize: (args) => {
+        const index = numberArg(args, 'index', -1, -1, 100_000)
+        if (index >= 0) return `识别并点击控件 #${index}`
+        const name = stringArg(args, 'name').slice(0, 40)
+        const type = stringArg(args, 'type')
+        return `识别并点击 ${type ? `${type} ` : ''}${name || '?'}`
+      },
+      execute: async (args, context) => {
+        const snapshot = await runPowerShell(
+          'ui-snapshot',
+          UI_SCRIPT,
+          ['-Max', '150'],
+          25_000
+        )
+        const items = parseUiItems(snapshot)
+        if (!items.length) {
+          throw new ToolError('没有识别到可点击的窗口或控件')
+        }
+        const item = pickUiItem(items, args)
+        if (!item) {
+          const names = items
+            .filter((entry) => entry.kind === 'control')
+            .slice(0, 12)
+            .map((entry) => `${entry.type ?? '控件'}:${entry.name ?? ''}`)
+            .join('；')
+          throw new ToolError(
+            `没有找到匹配的控件。可用控件：${names || '（无）'}`
+          )
+        }
+        const x = Math.round(Number(item.x ?? 0) + Number(item.width ?? 0) / 2)
+        const y = Math.round(Number(item.y ?? 0) + Number(item.height ?? 0) / 2)
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          throw new ToolError('控件坐标无效')
+        }
+        await runPowerShell(
+          'desktop-mouse',
+          MOUSE_SCRIPT,
+          mouseArgs('click', {
+            ...args,
+            x,
+            y
+          }),
+          12_000
+        )
+        await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+        return {
+          output: `已点击 ${item.type ?? '控件'}「${item.name ?? ''}」中心 (${x}, ${y})`
         }
       }
     },

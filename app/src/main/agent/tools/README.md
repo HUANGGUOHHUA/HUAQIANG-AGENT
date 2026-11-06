@@ -6,8 +6,9 @@ Agent 工具集合。
 
 桌面控制工具：
 
-- `ui_snapshot`：通过 Windows UI Automation 读取前台窗口和控件坐标
-- `screen_ocr`：截取主屏幕并调用 Windows.Media.Ocr
+- `ui_snapshot`：通过 Windows UI Automation 读取所有显示器上的窗口、控件、稳定编号和坐标
+- `ui_click`：按编号/名称/类型自动定位并点击控件中心
+- `screen_ocr`：截取全部显示器并调用 Windows.Media.Ocr
 - `mouse_move` / `mouse_click` / `mouse_drag` / `mouse_scroll`
 - `keyboard_type` / `keyboard_press`
 

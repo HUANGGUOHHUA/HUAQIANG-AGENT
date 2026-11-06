@@ -61,6 +61,7 @@ const MAX_TOOL_RESULT_CHARS = 30_000
 const DESKTOP_TOOLS = new Set([
   'ui_snapshot',
   'screen_ocr',
+  'ui_click',
   'mouse_move',
   'mouse_click',
   'mouse_drag',
