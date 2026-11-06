@@ -11,8 +11,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyProduct("华强以太")]
 [assembly: System.Reflection.AssemblyCompany("华强以太")]
 [assembly: System.Reflection.AssemblyCopyright("华强以太")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.7.0")]
-[assembly: System.Reflection.AssemblyVersion("1.0.7.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.0.8.0")]
+[assembly: System.Reflection.AssemblyVersion("1.0.8.0")]
 
 namespace HuaqiangAgentUninstall
 {

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, screen } from 'electron'
+import { startInputLock, stopInputLock } from './input-lock'
 
 let overlay: BrowserWindow | null = null
 let active = false
@@ -54,7 +55,7 @@ function overlayHtml(): string {
   <div class="frame"></div>
   <div class="banner">
     <span class="dot"></span>
-    <span>华强以太正在控制屏幕和鼠标</span>
+    <span>华强以太正在控制 · 鼠标已锁定</span>
     <span class="hint">退出请按</span>
     <span class="key">ESC</span>
   </div>
@@ -89,6 +90,8 @@ function ensureOverlay(): BrowserWindow {
   })
   overlay.setIgnoreMouseEvents(true, { forward: true })
   overlay.setAlwaysOnTop(true, 'screen-saver')
+  // Keep the takeover banner/border out of screenshots and screen recordings.
+  overlay.setContentProtection(true)
   overlay.on('closed', () => {
     overlay = null
   })
@@ -98,6 +101,7 @@ function ensureOverlay(): BrowserWindow {
 export function showControlOverlay(): void {
   active = true
   suspended = false
+  startInputLock(process.pid)
   const win = ensureOverlay()
   win.setBounds(virtualBounds())
   void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml())}`)
@@ -107,6 +111,7 @@ export function showControlOverlay(): void {
 export function hideControlOverlay(): void {
   active = false
   suspended = false
+  stopInputLock()
   if (overlay && !overlay.isDestroyed()) {
     overlay.hide()
   }
@@ -134,6 +139,7 @@ export function isControlOverlayActive(): boolean {
 app.on('before-quit', () => {
   active = false
   suspended = false
+  stopInputLock()
   if (overlay && !overlay.isDestroyed()) {
     overlay.destroy()
     overlay = null

@@ -1004,7 +1004,7 @@ export default function SettingsModal({
                       checked={networkLocked}
                       onChange={(event) => setNetworkLocked(event.target.checked)}
                     />
-                    <span>禁止本程序发起任何网络请求</span>
+                    <span>禁止 Agent、模型和联网 MCP 发起网络请求</span>
                   </label>
                   <p>
                     开启后模型调用、网页抓取、联网 MCP、模型列表和压缩摘要都会被拒绝；关闭后恢复。不会关闭网卡，不影响其他软件。

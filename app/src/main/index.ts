@@ -165,7 +165,7 @@ let appBridge: BrowserBridge
 let agentWorker: AgentWorkerBridge | null = null
 const activeRuns = new Map<string, { controller: AbortController; sessionId: string }>()
 const NETWORK_LOCKED_ERROR =
-  '断网锁已开启：本程序已被禁止发起网络请求。请在设置中关闭断网锁后重试。'
+  '断网锁已开启：Agent、模型和联网 MCP 已被禁止发起网络请求。请在设置中关闭断网锁后重试。'
 
 function iconPath(): string {
   return app.isPackaged
