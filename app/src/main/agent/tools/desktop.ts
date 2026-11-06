@@ -197,8 +197,12 @@ public static class HqKeyboard
     [DllImport("user32.dll", SetLastError = true)]
     static extern uint SendInput(uint count, INPUT[] inputs, int size);
 
+    [DllImport("user32.dll")]
+    static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+
     const uint KEYEVENTF_KEYUP = 0x0002;
     const uint KEYEVENTF_UNICODE = 0x0004;
+    const byte VK_LWIN = 0x5B;
 
     public static void TypeText(string text)
     {
@@ -215,6 +219,19 @@ public static class HqKeyboard
             Thread.Sleep(2);
         }
     }
+
+    public static void PressWin(string key)
+    {
+        if (string.IsNullOrEmpty(key)) throw new ArgumentException("win key is empty");
+        byte vk = (byte)char.ToUpperInvariant(key[0]);
+        keybd_event(VK_LWIN, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(40);
+        keybd_event(vk, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(50);
+        keybd_event(vk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        Thread.Sleep(30);
+        keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    }
 }
 '@
 
@@ -228,14 +245,23 @@ if ($Action -eq 'type') {
   $parts = $raw -split '\+'
   $key = $parts[$parts.Length - 1].Trim()
   $mods = ''
+  $winMod = $false
   for ($i = 0; $i -lt $parts.Length - 1; $i++) {
     switch ($parts[$i].Trim().ToUpperInvariant()) {
       'CTRL' { $mods += '^' }
       'CONTROL' { $mods += '^' }
       'ALT' { $mods += '%' }
       'SHIFT' { $mods += '+' }
+      'WIN' { $winMod = $true }
+      'WINDOWS' { $winMod = $true }
       default { throw "unsupported modifier: $($parts[$i])" }
     }
+  }
+  if ($winMod) {
+    if ($key.Length -ne 1) { throw 'WIN 组合目前只支持单个字母或数字键，例如 WIN+D' }
+    [HqKeyboard]::PressWin($key)
+    Write-Output 'ok'
+    exit 0
   }
   $map = @{
     'ENTER'='{ENTER}'; 'RETURN'='{ENTER}'; 'TAB'='{TAB}'; 'ESC'='{ESC}'; 'ESCAPE'='{ESC}'
@@ -740,6 +766,7 @@ export function createDesktopTools(
       execute: async (args, context) => {
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('move', args), 12_000)
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+        uiCache = null
         return { output: '鼠标已移动' }
       }
     },
@@ -769,6 +796,7 @@ export function createDesktopTools(
       execute: async (args, context) => {
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('click', args), 12_000)
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+        uiCache = null
         return { output: '鼠标点击完成' }
       }
     },
@@ -794,6 +822,7 @@ export function createDesktopTools(
       execute: async (args, context) => {
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('drag', args), 15_000)
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+        uiCache = null
         return { output: '鼠标拖拽完成' }
       }
     },
@@ -819,6 +848,7 @@ export function createDesktopTools(
         if (numberArg(args, 'amount', 0, -20, 20) === 0) throw new ToolError('amount 不能为 0')
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('scroll', args), 12_000)
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+        uiCache = null
         return { output: '滚轮操作完成' }
       }
     },
@@ -840,6 +870,7 @@ export function createDesktopTools(
         if (!text) throw new ToolError('text 不能为空')
         const encoded = Buffer.from(text, 'utf8').toString('base64')
         await runPowerShell('desktop-keyboard', KEYBOARD_SCRIPT, ['-Action', 'type', '-EncodedText', encoded], 20_000)
+        uiCache = null
         return { output: `已输入 ${text.length} 个字符` }
       }
     },
@@ -860,6 +891,7 @@ export function createDesktopTools(
         const keys = stringArg(args, 'keys', { required: true, max: 200 }).trim()
         if (!keys) throw new ToolError('keys 不能为空')
         await runPowerShell('desktop-keyboard', KEYBOARD_SCRIPT, ['-Action', 'press', '-Keys', keys], 12_000)
+        uiCache = null
         return { output: `已按键 ${keys}` }
       }
     }
