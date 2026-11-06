@@ -1004,10 +1004,10 @@ export default function SettingsModal({
                       checked={networkLocked}
                       onChange={(event) => setNetworkLocked(event.target.checked)}
                     />
-                    <span>禁止 Agent、模型和联网 MCP 发起网络请求</span>
+                    <span>模型 API 仍可用，但禁止模型上网</span>
                   </label>
                   <p>
-                    开启后模型调用、网页抓取、联网 MCP、模型列表和压缩摘要都会被拒绝；关闭后恢复。不会关闭网卡，不影响其他软件。
+                    开启后仍可正常调用模型；网页抓取、浏览器导航、联网 MCP 和联网命令会被拒绝。关闭后恢复。不会关闭网卡，不影响其他软件。
                   </p>
                 </div>
 

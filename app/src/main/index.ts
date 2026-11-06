@@ -165,7 +165,23 @@ let appBridge: BrowserBridge
 let agentWorker: AgentWorkerBridge | null = null
 const activeRuns = new Map<string, { controller: AbortController; sessionId: string }>()
 const NETWORK_LOCKED_ERROR =
-  '断网锁已开启：Agent、模型和联网 MCP 已被禁止发起网络请求。请在设置中关闭断网锁后重试。'
+  '断网锁已开启：模型 API 仍可用，但禁止网页抓取、浏览器导航、联网 MCP 和联网命令。'
+const NETWORK_COMMAND_RE =
+  /(https?:\/\/|ftp:\/\/|\bcurl\b|\bwget\b|Invoke-WebRequest|Invoke-RestMethod|Start-BitsTransfer|Test-NetConnection|Resolve-DnsName|\bnslookup\b|\bping\b|\bssh\b|\bscp\b|\bftp\b|git\s+clone|npm\s+(install|i)\b|pnpm\s+(add|install)\b|yarn\s+add\b|pip\s+install|winget\s+install|choco\s+install|\bpython\b[^\n]*-m\s+pip|node\s+[^\n]*fetch)/i
+
+function withNetworkLock(tool: ToolDefinition): ToolDefinition {
+  if (tool.name !== 'web_fetch' && tool.name !== 'run_command') return tool
+  return {
+    ...tool,
+    execute: async (args, context) => {
+      if (!settingsStore.getRaw().networkLocked) return tool.execute(args, context)
+      if (tool.name === 'web_fetch') throw new Error(NETWORK_LOCKED_ERROR)
+      const command = typeof args.command === 'string' ? args.command : ''
+      if (NETWORK_COMMAND_RE.test(command)) throw new Error(NETWORK_LOCKED_ERROR)
+      return tool.execute(args, context)
+    }
+  }
+}
 
 function iconPath(): string {
   return app.isPackaged
@@ -392,11 +408,10 @@ function registerIpc(): void {
 
   ipcMain.handle('settings:save', (_event, input: SettingsSaveInput) => {
     const settings = settingsStore.save(input)
-    if (settings.networkLocked) {
-      void mcpManager.closeAll()
-    } else {
-      void mcpManager.sync(settingsStore.getRaw().mcpServers)
-    }
+    const servers = settingsStore.getRaw().mcpServers
+    void mcpManager.sync(
+      settings.networkLocked ? servers.filter((server) => server.transport !== 'http') : servers
+    )
     return settings
   })
 
@@ -412,9 +427,6 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('profile:test', async (_event, input: ProfileTestInput) => {
-    if (settingsStore.getRaw().networkLocked) {
-      return { ok: false, message: NETWORK_LOCKED_ERROR }
-    }
     if (!input?.profile) return { ok: false, message: '配置为空' }
     let apiKey = ''
     if (input.apiKey === undefined) {
@@ -426,9 +438,6 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('profile:models', async (_event, input: ProfileTestInput) => {
-    if (settingsStore.getRaw().networkLocked) {
-      return { ok: false, message: NETWORK_LOCKED_ERROR }
-    }
     if (!input?.profile) return { ok: false, message: '配置为空' }
     let apiKey = ''
     if (input.apiKey === undefined) {
@@ -566,11 +575,15 @@ function registerIpc(): void {
 
   ipcMain.handle('mcp:statuses', () => mcpManager.statuses())
   ipcMain.handle('mcp:restart', () => {
-    if (settingsStore.getRaw().networkLocked) return mcpManager.statuses()
-    return mcpManager.sync(settingsStore.getRaw().mcpServers)
+    const servers = settingsStore.getRaw().mcpServers
+    return mcpManager.sync(
+      settingsStore.getRaw().networkLocked
+        ? servers.filter((server) => server.transport !== 'http')
+        : servers
+    )
   })
   ipcMain.handle('mcp:test', (_event, config: McpServerConfig) => {
-    if (settingsStore.getRaw().networkLocked) {
+    if (settingsStore.getRaw().networkLocked && config.transport === 'http') {
       return { ok: false, message: NETWORK_LOCKED_ERROR, tools: [] }
     }
     return mcpManager.test(config)
@@ -658,9 +671,6 @@ function registerIpc(): void {
     async (_event, input: CompactRequest): Promise<CompactResult> => {
       if (!input || !Array.isArray(input.messages)) {
         return { ok: false, error: '请求格式不正确' }
-      }
-      if (settingsStore.getRaw().networkLocked) {
-        return { ok: false, error: NETWORK_LOCKED_ERROR }
       }
       if (activeRuns.size > 0) {
         return { ok: false, error: '当前有任务正在运行，请稍后再压缩' }
@@ -750,9 +760,6 @@ function registerIpc(): void {
   ipcMain.handle('agent:run', async (event, input: AgentRunRequest): Promise<AgentRunResult> => {    if (!input || typeof input !== 'object' || !Array.isArray(input.messages)) {
       return { ok: false, error: '请求格式不正确' }
     }
-    if (settingsStore.getRaw().networkLocked) {
-      return { ok: false, error: NETWORK_LOCKED_ERROR }
-    }
     if (activeRuns.size > 0) {
       return { ok: false, error: '已有任务正在运行，请先停止或等待完成。' }
     }
@@ -810,9 +817,14 @@ function registerIpc(): void {
       const localOrProxied = workerReady
         ? baseTools.map((tool) => agentWorker!.proxyTool(tool))
         : baseTools
+      const guardedTools = localOrProxied.map(withNetworkLock)
       const coreTools: ToolDefinition[] = [
-        ...localOrProxied,
-        ...createBrowserTools(browserBridge, () => mainWindow),
+        ...guardedTools,
+        ...createBrowserTools(
+          browserBridge,
+          () => mainWindow,
+          () => settingsStore.getRaw().networkLocked
+        ),
         createAppControlTool(appBridge, () => mainWindow),
         ...createDesktopTools(() => mainWindow, {
           suspendOverlay: suspendControlOverlay,
@@ -824,6 +836,15 @@ function registerIpc(): void {
         mcpTools = await mcpManager.tools()
       } catch (error) {
         console.error('Failed to load MCP tools:', error)
+      }
+      if (settingsStore.getRaw().networkLocked) {
+        const remoteNames = settingsStore
+          .getRaw()
+          .mcpServers.filter((server) => server.transport === 'http')
+          .map((server) => server.name)
+        mcpTools = mcpTools.filter(
+          (tool) => !remoteNames.some((name) => tool.description.includes(`[MCP 服务器：${name}]`))
+        )
       }
       const enabledMcp = settingsStore
         .getRaw()
@@ -1377,8 +1398,13 @@ async function bootstrap(): Promise<void> {
     void startAgentWorker()
   }
 
-  if (!settingsStore.getRaw().networkLocked) {
-    void mcpManager.sync(settingsStore.getRaw().mcpServers)
+  {
+    const servers = settingsStore.getRaw().mcpServers
+    void mcpManager.sync(
+      settingsStore.getRaw().networkLocked
+        ? servers.filter((server) => server.transport !== 'http')
+        : servers
+    )
   }
   void builtinMcp
     ?.start()

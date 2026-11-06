@@ -19,12 +19,19 @@ function normalizeUrl(input: string): string {
 
 export function createBrowserTools(
   bridge: BrowserBridge,
-  getWindow: () => BrowserWindow | null
+  getWindow: () => BrowserWindow | null,
+  isNetworkLocked: () => boolean = () => false
 ): ToolDefinition[] {
   const run = async (
     action: 'open' | 'snapshot' | 'click' | 'type' | 'scroll' | 'back' | 'reload',
     params: Record<string, unknown>
   ): Promise<{ output: string }> => {
+    if (
+      isNetworkLocked() &&
+      ['open', 'click', 'type', 'back', 'reload'].includes(action)
+    ) {
+      throw new ToolError('断网锁已开启：内置浏览器禁止加载或导航网页。')
+    }
     try {
       const data = await bridge.command(getWindow(), action, params)
       return { output: typeof data === 'string' ? data : JSON.stringify(data ?? { ok: true }, null, 2) }
