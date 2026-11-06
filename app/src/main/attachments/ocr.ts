@@ -7,9 +7,14 @@ import { promisify } from 'node:util'
 
 const run = promisify(execFile)
 
-const OCR_SCRIPT = String.raw`param([string]$Path, [switch]$Json)
+const OCR_SCRIPT = String.raw`param(
+  [string]$Path,
+  [switch]$Json,
+  [double]$Scale = 2.0
+)
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
   $_.Name -eq "AsTask" -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -match "IAsyncOperation"
@@ -24,44 +29,97 @@ function Await($WinRtTask, $ResultType) {
 [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime] > $null
 [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime] > $null
 [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime] > $null
-$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($Path)) ([Windows.Storage.StorageFile])
+[Windows.Globalization.Language, Windows.Globalization, ContentType=WindowsRuntime] > $null
+
+$source = [System.Drawing.Bitmap]::FromFile($Path)
+$originalWidth = $source.Width
+$originalHeight = $source.Height
+$temp = Join-Path ([System.IO.Path]::GetTempPath()) ("hq-ocr-" + [Guid]::NewGuid().ToString("N") + ".png")
+$scaleFactor = 1.0
+try {
+  # Upscale before OCR. Windows OCR loses a lot of accuracy on 12-14px UI text.
+  $scaleFactor = [Math]::Max(1.0, [Math]::Min(2.0, $Scale))
+  $targetWidth = [Math]::Max(1, [int][Math]::Round($originalWidth * $scaleFactor))
+  $targetHeight = [Math]::Max(1, [int][Math]::Round($originalHeight * $scaleFactor))
+  $scaled = New-Object System.Drawing.Bitmap($targetWidth, $targetHeight)
+  try {
+    $graphics = [System.Drawing.Graphics]::FromImage($scaled)
+    try {
+      $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+      $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+      $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+
+      # Upscale only. Avoid ColorMatrix here: some .NET/GDI combinations produce
+      # a transparent bitmap when ImageAttributes is used with this overload.
+      $destination = New-Object System.Drawing.Rectangle(0, 0, $targetWidth, $targetHeight)
+      $graphics.DrawImage($source, $destination)
+    } finally {
+      $graphics.Dispose()
+    }
+    $scaled.Save($temp, [System.Drawing.Imaging.ImageFormat]::Png)
+  } finally {
+    $scaled.Dispose()
+  }
+} finally {
+  $source.Dispose()
+}
+
+$engine = $null
+foreach ($tag in @("zh-Hans-CN", "zh-CN", "zh-Hans", "en-US")) {
+  try {
+    $language = New-Object -TypeName Windows.Globalization.Language -ArgumentList $tag
+    $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($language)
+    if ($engine) { break }
+  } catch { }
+}
+if (-not $engine) {
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+}
+if (-not $engine) { throw "No Windows OCR language is installed" }
+
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($temp)) ([Windows.Storage.StorageFile])
 $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
 $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
 $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-if (-not $engine) { throw "No Windows OCR language is installed" }
 $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-if ($Json) {
-  $lines = @()
-  foreach ($line in $result.Lines) {
-    $words = @($line.Words)
-    if ($words.Count -eq 0) { continue }
-    $left = [double]::PositiveInfinity
-    $top = [double]::PositiveInfinity
-    $right = 0.0
-    $bottom = 0.0
-    foreach ($word in $words) {
-      $r = $word.BoundingRect
-      $left = [Math]::Min($left, $r.X)
-      $top = [Math]::Min($top, $r.Y)
-      $right = [Math]::Max($right, $r.X + $r.Width)
-      $bottom = [Math]::Max($bottom, $r.Y + $r.Height)
+
+try {
+  if ($Json) {
+    $lines = @()
+    foreach ($line in $result.Lines) {
+      $words = @($line.Words)
+      if ($words.Count -eq 0) { continue }
+      $left = [double]::PositiveInfinity
+      $top = [double]::PositiveInfinity
+      $right = 0.0
+      $bottom = 0.0
+      foreach ($word in $words) {
+        $r = $word.BoundingRect
+        $left = [Math]::Min($left, $r.X)
+        $top = [Math]::Min($top, $r.Y)
+        $right = [Math]::Max($right, $r.X + $r.Width)
+        $bottom = [Math]::Max($bottom, $r.Y + $r.Height)
+      }
+      $lines += [pscustomobject]@{
+        text = $line.Text
+        x = [Math]::Round($left / $scaleFactor)
+        y = [Math]::Round($top / $scaleFactor)
+        width = [Math]::Round(($right - $left) / $scaleFactor)
+        height = [Math]::Round(($bottom - $top) / $scaleFactor)
+      }
     }
-    $lines += [pscustomobject]@{
-      text = $line.Text
-      x = [Math]::Round($left)
-      y = [Math]::Round($top)
-      width = [Math]::Round($right - $left)
-      height = [Math]::Round($bottom - $top)
-    }
+    [pscustomobject]@{
+      width = [int]$originalWidth
+      height = [int]$originalHeight
+      lines = @($lines)
+    } | ConvertTo-Json -Depth 4 -Compress
+  } else {
+    $result.Text
   }
-  [pscustomobject]@{
-    width = [int]$bitmap.PixelWidth
-    height = [int]$bitmap.PixelHeight
-    lines = @($lines)
-  } | ConvertTo-Json -Depth 4 -Compress
-} else {
-  $result.Text
+} finally {
+  $bitmap.Dispose()
+  $stream.Dispose()
+  Remove-Item $temp -Force -ErrorAction SilentlyContinue
 }
 `
 
@@ -109,16 +167,23 @@ export interface OcrBoxes {
   lines: OcrLineBox[]
 }
 
-/** OCR an image and return line bounding boxes in image pixels. */
-export async function ocrImageBoxes(path: string): Promise<OcrBoxes> {
+async function runOcr(path: string, json: boolean): Promise<string> {
   const script = await ensureScript()
-  const { stdout } = await run(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', path, '-Json'],
-    { timeout: 45_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }
-  )
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', path, '-Scale', '2.0']
+  if (json) args.push('-Json')
+  const { stdout } = await run('powershell.exe', args, {
+    timeout: 60_000,
+    windowsHide: true,
+    maxBuffer: 8 * 1024 * 1024,
+    encoding: 'utf8'
+  })
+  return stdout
+}
+
+/** OCR an image and return line bounding boxes in original image pixels. */
+export async function ocrImageBoxes(path: string): Promise<OcrBoxes> {
   try {
-    const parsed = JSON.parse(stdout) as Partial<OcrBoxes>
+    const parsed = JSON.parse(await runOcr(path, true)) as Partial<OcrBoxes>
     const lines = Array.isArray(parsed.lines)
       ? parsed.lines
           .map((line) => ({
@@ -142,11 +207,5 @@ export async function ocrImageBoxes(path: string): Promise<OcrBoxes> {
 
 /** OCR an image with the built-in Windows.Media.Ocr engine. */
 export async function ocrImage(path: string): Promise<string> {
-  const script = await ensureScript()
-  const { stdout } = await run(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', path],
-    { timeout: 45_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }
-  )
-  return normalizeOcrText(stdout)
+  return normalizeOcrText(await runOcr(path, false))
 }
