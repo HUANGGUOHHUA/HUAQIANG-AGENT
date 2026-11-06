@@ -32,6 +32,32 @@ describe('browser control tools', () => {
     })
   })
 
+  it('runs multiple browser steps in one tool call', async () => {
+    const calls: Array<{ action: string; params: Record<string, unknown> }> = []
+    const bridge = {
+      command: async (_win: unknown, action: string, params: Record<string, unknown>) => {
+        calls.push({ action, params })
+        return { ok: true, action }
+      }
+    }
+    const tools = createBrowserTools(bridge as never, () => null)
+    const batch = tools.find((tool) => tool.name === 'browser_batch')!
+    const result = await batch.execute(
+      {
+        steps: [
+          { action: 'fill', selector: '#name', value: '张三' },
+          { action: 'click', selector: '#submit' },
+          { action: 'wait', ms: 1 }
+        ]
+      },
+      context
+    )
+    expect(calls).toHaveLength(2)
+    expect(calls[0].action).toBe('fill')
+    expect(calls[1].action).toBe('click')
+    expect(result.output).toContain('"ok": true')
+  })
+
   it('uses the vision analyzer only when a screenshot is available', async () => {
     const shot: BrowserVisionShot = {
       dataUrl: 'data:image/png;base64,AAAA',

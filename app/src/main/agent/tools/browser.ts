@@ -246,6 +246,65 @@ export function createBrowserTools(
       }
     },
     {
+      name: 'browser_batch',
+      displayName: '批量操作页面',
+      risk: 'network',
+      description:
+        '在一次工具调用中顺序执行多个浏览器操作，减少模型往返。steps 是数组，每个对象包含 action（click/fill/type/autofill/scroll）和对应参数；支持 wait（毫秒）。最多 20 步。每一步都会返回结果，某一步失败会停止后续步骤。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          steps: {
+            type: 'array',
+            description: '操作步骤数组',
+            items: { type: 'object' }
+          }
+        },
+        required: ['steps'],
+        additionalProperties: false
+      },
+      summarize: (args) => {
+        const steps = Array.isArray(args.steps) ? args.steps : []
+        return `批量执行 ${steps.length} 个浏览器操作`
+      },
+      execute: async (args) => {
+        const steps = Array.isArray(args.steps) ? args.steps.slice(0, 20) : []
+        if (!steps.length) throw new ToolError('steps 不能为空')
+        const results: Array<Record<string, unknown>> = []
+        for (let index = 0; index < steps.length; index += 1) {
+          const raw = steps[index]
+          if (!raw || typeof raw !== 'object') {
+            throw new ToolError(`第 ${index + 1} 步格式不正确`)
+          }
+          const step = raw as Record<string, unknown>
+          const action = stringArg(step, 'action').toLowerCase()
+          if (action === 'wait') {
+            const ms = numberArg(step, 'ms', 300, 0, 5000)
+            await new Promise((resolve) => setTimeout(resolve, ms))
+            results.push({ action, ok: true })
+            continue
+          }
+          if (!['click', 'fill', 'type', 'autofill', 'scroll'].includes(action)) {
+            throw new ToolError(`第 ${index + 1} 步不支持 action=${action}`)
+          }
+          const params = { ...step }
+          delete params.action
+          try {
+            const result = await run(action as never, params)
+            results.push({ action, ok: true, result: result.output })
+          } catch (error) {
+            results.push({
+              action,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error)
+            })
+            break
+          }
+        }
+        return { output: JSON.stringify({ results }, null, 2) }
+      }
+    },
+    {
       name: 'browser_scroll',
       displayName: '滚动页面',
       risk: 'read',

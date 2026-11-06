@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.3
+
+- 新增 `browser_batch`：一次工具调用完成多个填充/点击/等待步骤，减少模型往返
+- `browser_click` 的文字匹配扩展到 aria-label、placeholder、name 和关联 label，降低点错控件
+- index 失效时自动回退 selector/text 定位，提升页面刷新后的成功率
+- 版本号更新至 1.1.3
+
 ## 1.1.2
 
 - 新增 `browser_vision`：不依赖视觉，DOM 优先；当前模型支持图片输入时自动使用页面截图做视觉识别

@@ -142,7 +142,8 @@ const SELECT_HELPER = `
   const pickElement = (index, selector, text, role) => {
     const all = Array.from(document.querySelectorAll(${JSON.stringify(CONTROL_SELECTOR)}))
     if (Number.isInteger(index) && index >= 0) {
-      return document.querySelector('[data-hq-idx="' + index + '"]')
+      const byIndex = document.querySelector('[data-hq-idx="' + index + '"]')
+      if (byIndex) return byIndex
     }
     if (selector) {
       try {
@@ -152,16 +153,17 @@ const SELECT_HELPER = `
     }
     const wantedText = String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase()
     const wantedRole = String(role || '').trim().toLowerCase()
+    const labelText = (el) => {
+      const labels = (() => { try { return el.labels && el.labels.length ? el.labels[0].innerText : '' } catch (error) { return '' } })()
+      return [
+        el.innerText, el.value, el.getAttribute('aria-label'), el.getAttribute('title'),
+        el.getAttribute('placeholder'), el.getAttribute('name'), labels
+      ].filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().toLowerCase()
+    }
     if (wantedText) {
-      const exact = all.find((el) => {
-        const value = (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase()
-        return value === wantedText
-      })
+      const exact = all.find((el) => labelText(el) === wantedText)
       if (exact) return exact
-      const partial = all.find((el) => {
-        const value = (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase()
-        return value.includes(wantedText)
-      })
+      const partial = all.find((el) => labelText(el).includes(wantedText))
       if (partial) return partial
     }
     if (wantedRole) {
