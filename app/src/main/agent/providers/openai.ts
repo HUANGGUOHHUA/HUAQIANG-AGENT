@@ -1,4 +1,5 @@
 import type { AppMessage, AttachmentPayload, Usage } from '../../../shared/types'
+import { cleanRepetition, findRepetition } from '../repetition'
 import { errorMessageFrom, readSse } from './sse'
 import type {
   ProviderCallbacks,
@@ -119,7 +120,9 @@ function parseFallbackJson(
   const choices = Array.isArray(json.choices) ? json.choices : []
   const choice = (choices[0] ?? {}) as Record<string, unknown>
   const message = (choice.message ?? {}) as Record<string, unknown>
-  const text = typeof message.content === 'string' ? message.content : ''
+  const rawText = typeof message.content === 'string' ? message.content : ''
+  const repetition = Boolean(findRepetition(rawText))
+  const text = repetition ? cleanRepetition(rawText) : rawText
   if (text) callbacks.onText(text)
   const toolCalls: ProviderToolCall[] = []
   if (Array.isArray(message.tool_calls)) {
@@ -141,7 +144,8 @@ function parseFallbackJson(
     reasoning: '',
     toolCalls,
     usage: usageFromRaw(usage),
-    finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : undefined
+    finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : undefined,
+    repetition
   }
 }
 
@@ -155,7 +159,11 @@ export async function streamOpenAI(
     messages: toOpenAIMessages(request.system, request.messages, request.attachments),
     stream: true,
     temperature: config.temperature,
-    max_tokens: config.maxTokens
+    max_tokens: config.maxTokens,
+    // These are accepted by OpenAI-compatible local servers and discourage
+    // the token-level loops that small quantized models often fall into.
+    frequency_penalty: 0.3,
+    presence_penalty: 0.2
   }
   if (isLocalEndpoint(config.baseUrl)) {
     // llama.cpp and several local OpenAI-compatible servers reuse the KV cache
@@ -207,6 +215,8 @@ export async function streamOpenAI(
   let text = ''
   let reasoning = ''
   let finishReason = ''
+  let repetition = false
+  let lastRepeatCheck = 0
   let usage = usageOf(0, 0)
   const toolCalls = new Map<number, { id: string; name: string; args: string }>()
 
@@ -234,6 +244,15 @@ export async function streamOpenAI(
     const content = delta.content
     if (typeof content === 'string' && content) {
       text += content
+      if (text.length > 240 && text.length - lastRepeatCheck >= 120) {
+        lastRepeatCheck = text.length
+        if (findRepetition(text)) {
+          repetition = true
+          finishReason = 'repetition'
+          text = cleanRepetition(text)
+          break
+        }
+      }
       callbacks.onText(content)
     }
     const thinking =
@@ -281,6 +300,7 @@ export async function streamOpenAI(
         argsRaw: call.args
       })),
     usage,
-    finishReason
+    finishReason,
+    repetition
   }
 }

@@ -465,6 +465,13 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
 
     usage = addUsage(usage, result.usage)
     emit({ type: 'usage', runId, usage })
+    if (result.repetition) {
+      emit({
+        type: 'notice',
+        runId,
+        message: '检测到模型回复开始重复，已在重复段落前停止。可以直接发送“继续”完成剩余内容。'
+      })
+    }
 
     const llmEnded = Date.now()
     stats.steps += 1

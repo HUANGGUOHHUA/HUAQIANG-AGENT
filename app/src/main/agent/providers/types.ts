@@ -18,6 +18,7 @@ export interface ProviderResult {
   toolCalls: ProviderToolCall[]
   usage: Usage
   finishReason?: string
+  repetition?: boolean
 }
 
 export interface ProviderConfig {

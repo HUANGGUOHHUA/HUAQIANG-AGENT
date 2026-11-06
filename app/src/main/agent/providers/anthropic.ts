@@ -1,4 +1,5 @@
 import type { AppMessage, AttachmentPayload, Usage } from '../../../shared/types'
+import { cleanRepetition, findRepetition } from '../repetition'
 import { errorMessageFrom, readSse } from './sse'
 import type {
   ProviderCallbacks,
@@ -137,6 +138,8 @@ function fallbackJson(json: Record<string, unknown>, callbacks: ProviderCallback
       }
     }
   }
+  const repetition = Boolean(findRepetition(text))
+  if (repetition) text = cleanRepetition(text)
   if (text) callbacks.onText(text)
   if (reasoning) callbacks.onReasoning(reasoning)
   const usage = (json.usage ?? {}) as Record<string, unknown>
@@ -145,7 +148,8 @@ function fallbackJson(json: Record<string, unknown>, callbacks: ProviderCallback
     reasoning,
     toolCalls,
     usage: usageFromAnthropic(usage),
-    finishReason: typeof json.stop_reason === 'string' ? json.stop_reason : undefined
+    finishReason: typeof json.stop_reason === 'string' ? json.stop_reason : undefined,
+    repetition
   }
 }
 
@@ -216,6 +220,8 @@ export async function streamAnthropic(
   let text = ''
   let reasoning = ''
   let finishReason = ''
+  let repetition = false
+  let lastRepeatCheck = 0
   let inputTokens = 0
   let outputTokens = 0
   let cacheReadTokens = 0
@@ -281,6 +287,15 @@ export async function streamAnthropic(
       const delta = (payload.delta ?? {}) as Record<string, unknown>
       if (delta.type === 'text_delta' && typeof delta.text === 'string') {
         text += delta.text
+        if (text.length > 240 && text.length - lastRepeatCheck >= 120) {
+          lastRepeatCheck = text.length
+          if (findRepetition(text)) {
+            repetition = true
+            finishReason = 'repetition'
+            text = cleanRepetition(text)
+            break
+          }
+        }
         callbacks.onText(delta.text)
       } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
         reasoning += delta.thinking
@@ -318,6 +333,7 @@ export async function streamAnthropic(
     reasoning,
     toolCalls,
     usage: usageOf(inputTokens, outputTokens, cacheReadTokens, cacheMissTokens, cacheCreationTokens),
-    finishReason
+    finishReason,
+    repetition
   }
 }
