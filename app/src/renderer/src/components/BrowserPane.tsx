@@ -282,6 +282,41 @@ const SELECT_HELPER = `
       }
     }
   }
+  const flashElement = (el, label) => {
+    try {
+      const doc = el.ownerDocument
+      if (!doc || !doc.body) return
+      const rect = el.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
+      const old = doc.getElementById('hq-action-highlight')
+      if (old) old.remove()
+      const box = doc.createElement('div')
+      box.id = 'hq-action-highlight'
+      box.textContent = label || ''
+      box.style.cssText = [
+        'position:fixed',
+        'pointer-events:none',
+        'z-index:2147483647',
+        'left:' + Math.max(0, rect.left - 4) + 'px',
+        'top:' + Math.max(0, rect.top - 4) + 'px',
+        'width:' + (rect.width + 8) + 'px',
+        'height:' + (rect.height + 8) + 'px',
+        'border:2px solid #fbbf24',
+        'border-radius:7px',
+        'background:rgba(251,191,36,.10)',
+        'box-shadow:0 0 0 3px rgba(251,191,36,.18),0 0 18px rgba(251,191,36,.65)',
+        'color:#451a03',
+        'font:600 11px/1.3 "Microsoft YaHei","Segoe UI",sans-serif',
+        'display:flex',
+        'align-items:flex-start',
+        'justify-content:flex-start',
+        'padding:2px 4px',
+        'box-sizing:border-box'
+      ].join(';')
+      doc.body.appendChild(box)
+      setTimeout(() => { try { box.remove() } catch (error) {} }, 1100)
+    } catch (error) {}
+  }
   const setElementValue = (el, value) => {
     const text = String(value ?? '')
     if (el.isContentEditable) {
@@ -329,6 +364,7 @@ const documentTitleScript = (selector: string): string => `(() => {
   if (!el) return { found: false, pageTitle: document.title }
   const value = 'value' in el ? el.value : ''
   const text = String(value || el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim()
+  if (text) flashElement(el, '读取标题')
   return {
     found: Boolean(text),
     text,
@@ -734,6 +770,7 @@ export default function BrowserPane(): React.JSX.Element {
   if (!el) return { missing: true }
   el.scrollIntoView({ block: 'center', inline: 'center' })
   const info = elementInfo(el)
+  flashElement(el, info.text || '点击')
   const rect = el.getBoundingClientRect()
   const options = {
     bubbles: true, cancelable: true, view: window, button: 0,
@@ -768,6 +805,7 @@ export default function BrowserPane(): React.JSX.Element {
   const el = pickElement(${JSON.stringify(index)}, ${JSON.stringify(selector)}, '', '')
   if (!el) return { missing: true }
   el.scrollIntoView({ block: 'center', inline: 'center' })
+  flashElement(el, '输入')
   el.focus({ preventScroll: true })
   setElementValue(el, ${JSON.stringify(text)})
   if (${submit ? 'true' : 'false'}) {
@@ -800,6 +838,7 @@ export default function BrowserPane(): React.JSX.Element {
   const el = pickElement(${JSON.stringify(index)}, ${JSON.stringify(selector)}, '', '')
   if (!el) return { missing: true }
   el.scrollIntoView({ block: 'center', inline: 'center' })
+  flashElement(el, '填充')
   el.focus({ preventScroll: true })
   setElementValue(el, ${JSON.stringify(value)})
   return { filled: true, ...elementInfo(el) }
@@ -841,6 +880,7 @@ export default function BrowserPane(): React.JSX.Element {
     const el = all.find((candidate) => keyOf(candidate).includes(wanted))
     if (!el) { unmatched.push(key); continue }
     el.scrollIntoView({ block: 'center', inline: 'center' })
+    flashElement(el, key)
     setElementValue(el, value)
     matched.push({ key, ...elementInfo(el) })
   }

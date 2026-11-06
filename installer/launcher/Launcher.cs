@@ -12,15 +12,15 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("华强以太")]
 [assembly: AssemblyCompany("华强以太")]
 [assembly: AssemblyCopyright("华强以太")]
-[assembly: AssemblyVersion("1.1.6.0")]
-[assembly: AssemblyFileVersion("1.1.6.0")]
-[assembly: AssemblyInformationalVersion("1.1.6")]
+[assembly: AssemblyVersion("1.1.7.0")]
+[assembly: AssemblyFileVersion("1.1.7.0")]
+[assembly: AssemblyInformationalVersion("1.1.7")]
 
 namespace HuaqiangAgentLauncher
 {
     internal static class Program
     {
-        private const string AppVersion = "1.1.6";
+        private const string AppVersion = "1.1.7";
         private const string PayloadName = "HuaqiangAgent.App.zip";
         private const string AppExeName = "HuaqiangAgent.exe";
 

@@ -581,6 +581,7 @@ function mouseArgs(action: string, args: Record<string, unknown>): string[] {
 export interface DesktopToolOptions {
   suspendOverlay?: () => void
   resumeOverlay?: () => void
+  highlight?: (target: { x: number; y: number; width?: number; height?: number; label?: string }) => void
 }
 
 export function createDesktopTools(
@@ -729,6 +730,13 @@ export function createDesktopTools(
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
           throw new ToolError('控件坐标无效')
         }
+        options.highlight?.({
+          x,
+          y,
+          width: Number(item.width ?? 26),
+          height: Number(item.height ?? 26),
+          label: `${item.type ?? '控件'}${item.name ? ` ${item.name}` : ''}`
+        })
         await runPowerShell(
           'desktop-mouse',
           MOUSE_SCRIPT,
@@ -764,6 +772,9 @@ export function createDesktopTools(
       },
       summarize: (args) => `移动鼠标到 (${numberArg(args, 'x', 0, -100_000, 100_000)}, ${numberArg(args, 'y', 0, -100_000, 100_000)})`,
       execute: async (args, context) => {
+        const x = numberArg(args, 'x', 0, -100_000, 100_000)
+        const y = numberArg(args, 'y', 0, -100_000, 100_000)
+        options.highlight?.({ x, y, label: '鼠标移动' })
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('move', args), 12_000)
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
         uiCache = null
@@ -794,6 +805,14 @@ export function createDesktopTools(
         return `${button === 'right' ? '右键' : button === 'middle' ? '中键' : '左键'}点击 (${numberArg(args, 'x', 0, -100_000, 100_000)}, ${numberArg(args, 'y', 0, -100_000, 100_000)}) ×${clicks}`
       },
       execute: async (args, context) => {
+        const x = numberArg(args, 'x', 0, -100_000, 100_000)
+        const y = numberArg(args, 'y', 0, -100_000, 100_000)
+        const button = stringArg(args, 'button', { fallback: 'left' })
+        options.highlight?.({
+          x,
+          y,
+          label: `${button === 'right' ? '右键' : button === 'middle' ? '中键' : '点击'} (${x}, ${y})`
+        })
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('click', args), 12_000)
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
         uiCache = null
@@ -820,6 +839,11 @@ export function createDesktopTools(
       },
       summarize: (args) => `拖拽 (${numberArg(args, 'x', 0, -100_000, 100_000)}, ${numberArg(args, 'y', 0, -100_000, 100_000)}) → (${numberArg(args, 'to_x', 0, -100_000, 100_000)}, ${numberArg(args, 'to_y', 0, -100_000, 100_000)})`,
       execute: async (args, context) => {
+        options.highlight?.({
+          x: numberArg(args, 'x', 0, -100_000, 100_000),
+          y: numberArg(args, 'y', 0, -100_000, 100_000),
+          label: '拖拽起点'
+        })
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('drag', args), 15_000)
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
         uiCache = null
@@ -845,7 +869,13 @@ export function createDesktopTools(
       },
       summarize: (args) => `滚动滚轮 ${numberArg(args, 'amount', 0, -20, 20)} 格`,
       execute: async (args, context) => {
-        if (numberArg(args, 'amount', 0, -20, 20) === 0) throw new ToolError('amount 不能为 0')
+        const amount = numberArg(args, 'amount', 0, -20, 20)
+        if (amount === 0) throw new ToolError('amount 不能为 0')
+        const x = numberArg(args, 'x', 0, -100_000, 100_000)
+        const y = numberArg(args, 'y', 0, -100_000, 100_000)
+        if (x !== 0 || y !== 0) {
+          options.highlight?.({ x, y, label: `滚轮 ${amount > 0 ? '↑' : '↓'} ${Math.abs(amount)}` })
+        }
         await runPowerShell('desktop-mouse', MOUSE_SCRIPT, mouseArgs('scroll', args), 12_000)
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
         uiCache = null

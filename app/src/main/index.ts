@@ -55,6 +55,7 @@ import { createBrowserTools, createAppControlTool } from './agent/tools/browser'
 import { createDesktopTools } from './agent/tools/desktop'
 import {
   hideControlOverlay,
+  highlightControl,
   resumeControlOverlay,
   showControlOverlay,
   suspendControlOverlay
@@ -893,7 +894,8 @@ function registerIpc(): void {
         createAppControlTool(appBridge, () => mainWindow),
         ...createDesktopTools(() => mainWindow, {
           suspendOverlay: suspendControlOverlay,
-          resumeOverlay: resumeControlOverlay
+          resumeOverlay: resumeControlOverlay,
+          highlight: highlightControl
         })
       ]
       let mcpTools: ToolDefinition[] = []
