@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { unlink, writeFile } from 'node:fs/promises'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
@@ -584,6 +584,10 @@ export interface DesktopToolOptions {
   resumeOverlay?: () => void
   highlight?: (target: { x: number; y: number; width?: number; height?: number; label?: string }) => void
   pythonPath?: () => string
+  analyzeImage?: (
+    question: string,
+    image: { dataUrl: string; url?: string; title?: string }
+  ) => Promise<string>
 }
 
 export function createDesktopTools(
@@ -757,6 +761,42 @@ export function createDesktopTools(
           }
         } finally {
           await unlink(path).catch(() => undefined)
+        }
+      }
+    },
+    {
+      name: 'screen_vision',
+      displayName: '视觉识别桌面',
+      risk: 'network',
+      description:
+        '截取整个虚拟桌面，直接交给当前支持图片输入的模型做视觉识别。用于需要理解桌面布局、窗口、图标、图片或自绘界面时；普通文字用 screen_ocr，普通控件用 ui_snapshot。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          question: {
+            type: 'string',
+            description: '希望模型从桌面截图中识别的目标或回答的问题'
+          }
+        },
+        required: ['question'],
+        additionalProperties: false
+      },
+      summarize: (args) => `视觉识别桌面：${stringArg(args, 'question').slice(0, 60) || '?'}`,
+      execute: async (args) => {
+        if (!options.analyzeImage) throw new ToolError('当前没有可用的桌面视觉分析器')
+        const question = stringArg(args, 'question', { required: true, max: 2000 })
+        if (!question.trim()) throw new ToolError('question 不能为空')
+        const shot = await captureVirtualScreen()
+        try {
+          const bytes = await readFile(shot.path)
+          const text = await options.analyzeImage(question, {
+            dataUrl: `data:image/png;base64,${bytes.toString('base64')}`,
+            url: 'screen://virtual-desktop',
+            title: '桌面截图'
+          })
+          return { output: text || '（模型没有返回视觉识别结果）' }
+        } finally {
+          await unlink(shot.path).catch(() => undefined)
         }
       }
     },

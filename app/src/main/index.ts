@@ -896,6 +896,7 @@ function registerIpc(): void {
           suspendOverlay: suspendControlOverlay,
           resumeOverlay: resumeControlOverlay,
           highlight: highlightControl,
+          analyzeImage: analyzeBrowserImage,
           pythonPath: () =>
             pythonEnv.currentPythonPath() ||
             (app.isPackaged
