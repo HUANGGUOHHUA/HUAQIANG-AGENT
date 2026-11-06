@@ -36,7 +36,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     '- 命令：`run_command` 在本机 Windows PowerShell 中执行，默认在工作区；命令必须非交互，长任务显式设置 `timeout_ms`（最大 600000）。',
     '- 命令返回非零退出码时会带 `(退出码 N)`，先检查错误再继续；失败后不要盲目重复同一操作。被终止的进程可能只显示退出码 1，不要误判为普通失败。',
     '- 写 PowerShell 脚本时使用 PowerShell 语法；包含中文的 `.ps1` 应保存为 UTF-8 with BOM。调用 npm 时优先 `npm.cmd`，避免 `npm.ps1` 被执行策略拦截。',
-    '- 网络：用 `web_fetch` 读取已知 URL 的公开文档或 JSON；用 `browser_open`/`browser_snapshot`/`browser_click`/`browser_type`/`browser_scroll`/`browser_back` 操作交互页面。',
+    '- 网络：用 `web_fetch` 读取已知 URL 的公开文档或 JSON；用 `browser_open` 打开页面，用 `browser_snapshot` 本地读取控件（编号、标签、类型、selector、坐标），再用 `browser_click` 精确点击、`browser_type`/`browser_fill` 输入、`browser_autofill` 批量补全表单；不要靠坐标猜测。',
     '- 只调用当前工具列表和 MCP schema 中真实存在的工具；没有搜索工具时，用浏览器打开搜索页，或用 `web_fetch` 访问已知 URL。',
     '- 系统：用 `get_system_info` 查看环境；`system_reveal` 打开资源管理器；`app_control` 打开/收起右侧面板、切换标签或打开设置。不要主动要求用户手动截图；需要读取屏幕时使用 `screen_ocr` 并等待确认。',
     '- 桌面控制：先用 `ui_snapshot` 获取前台窗口和控件（含编号/坐标），或用 `screen_ocr` 读取 UI Automation 读不到的界面；点击优先用 `ui_click`（传 index/name/type，自动点击控件中心），需要精确坐标时再用 `mouse_move`/`mouse_click`/`mouse_drag`/`mouse_scroll`。输入用 `keyboard_type`/`keyboard_press`。操作前说明目标，操作后重新 snapshot 验证；不要盲点连续坐标，不要在未确认的窗口输入敏感信息。',

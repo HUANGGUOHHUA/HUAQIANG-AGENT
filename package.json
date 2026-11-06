@@ -1,6 +1,6 @@
 {
   "name": "huaqiang-agent",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "华强以太 - 本地 AI 编程与系统助手",
   "main": "./out/main/index.js",
   "author": "Huaqiang Aetheon Project",

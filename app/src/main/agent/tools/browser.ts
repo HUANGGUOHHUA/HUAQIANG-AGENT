@@ -23,12 +23,22 @@ export function createBrowserTools(
   isNetworkLocked: () => boolean = () => false
 ): ToolDefinition[] {
   const run = async (
-    action: 'open' | 'snapshot' | 'click' | 'type' | 'scroll' | 'back' | 'reload',
+    action:
+      | 'open'
+      | 'snapshot'
+      | 'click'
+      | 'type'
+      | 'fill'
+      | 'autofill'
+      | 'scroll'
+      | 'back'
+      | 'reload',
     params: Record<string, unknown>
   ): Promise<{ output: string }> => {
     if (
       isNetworkLocked() &&
-      ['open', 'click', 'type', 'back', 'reload'].includes(action)
+      (['open', 'click', 'type', 'back', 'reload'].includes(action) ||
+        ((action === 'fill' || action === 'autofill') && params.submit === true))
     ) {
       throw new ToolError('断网锁已开启：内置浏览器禁止加载或导航网页。')
     }
@@ -64,7 +74,7 @@ export function createBrowserTools(
       displayName: '查看页面',
       risk: 'read',
       description:
-        '读取内置浏览器当前页面的内容。返回页面的网址、标题、正文文本，以及可点击/可输入元素的编号列表。之后用 browser_click 或 browser_type 时，参数 index 就填这里的编号。',
+        '本地读取内置浏览器当前页面的控件和文本。返回网址、标题、正文，以及可点击/可输入控件的编号、标签、类型、name/id、placeholder、autocomplete、当前值和可视区域坐标。browser_click / browser_type / browser_fill 使用这里的 index 或 selector。',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       summarize: () => '读取当前页面内容',
       execute: async () => run('snapshot', {})
@@ -74,18 +84,33 @@ export function createBrowserTools(
       displayName: '点击元素',
       risk: 'network',
       description:
-        '点击内置浏览器页面中的一个元素。参数 index：browser_snapshot 返回的元素编号。点击后建议再用 browser_snapshot 查看新页面。',
+        '精确点击浏览器页面中的控件。可以传 index（browser_snapshot 的编号）、selector（CSS 选择器），或 text/role 按文字或角色查找；内部会滚动到控件中心、派发指针/鼠标事件并调用 click。点击后建议重新 snapshot 验证。',
       inputSchema: {
         type: 'object',
-        properties: { index: { type: 'number', description: 'browser_snapshot 返回的元素编号' } },
-        required: ['index'],
+        properties: {
+          index: { type: 'number', description: 'browser_snapshot 返回的控件编号，优先级最高' },
+          selector: { type: 'string', description: 'CSS 选择器，例如 #submit 或 button[type=submit]' },
+          text: { type: 'string', description: '按控件文字/aria-label 包含匹配' },
+          role: { type: 'string', description: '按 role 匹配，例如 button、link' }
+        },
         additionalProperties: false
       },
-      summarize: (args) => `点击元素 #${numberArg(args, 'index', -1, 0, 9999)}`,
+      summarize: (args) => {
+        const index = numberArg(args, 'index', -1, -1, 9999)
+        if (index >= 0) return `点击控件 #${index}`
+        const selector = stringArg(args, 'selector').slice(0, 60)
+        const text = stringArg(args, 'text').slice(0, 40)
+        return `点击控件 ${selector || text || '?'}`
+      },
       execute: async (args) => {
-        const index = numberArg(args, 'index', -1, 0, 9999)
-        if (index < 0) throw new ToolError('参数 index 必须是元素编号（数字）')
-        return run('click', { index })
+        const index = numberArg(args, 'index', -1, -1, 9999)
+        const selector = stringArg(args, 'selector').slice(0, 500)
+        const text = stringArg(args, 'text').slice(0, 200)
+        const role = stringArg(args, 'role').slice(0, 60)
+        if (index < 0 && !selector && !text && !role) {
+          throw new ToolError('请提供 index、selector、text 或 role')
+        }
+        return run('click', { index, selector, text, role })
       }
     },
     {
@@ -93,23 +118,86 @@ export function createBrowserTools(
       displayName: '输入文本',
       risk: 'network',
       description:
-        '在内置浏览器页面的输入框中输入文字。参数 index：browser_snapshot 返回的输入框编号；text：要输入的文字；submit：可选，填 true 表示输入后按回车提交（例如搜索框）。',
+        '向浏览器输入控件输入文字。可以传 index 或 selector；text 是要输入的文字；submit 为 true 时提交表单。内部使用原生 value setter 并派发 input/change，兼容 React 等受控输入。',
       inputSchema: {
         type: 'object',
         properties: {
-          index: { type: 'number', description: 'browser_snapshot 返回的输入框编号' },
+          index: { type: 'number', description: 'browser_snapshot 返回的控件编号' },
+          selector: { type: 'string', description: 'CSS 选择器，和 index 二选一' },
           text: { type: 'string', description: '要输入的文字' },
-          submit: { type: 'boolean', description: '为 true 时输入后按回车提交' }
+          submit: { type: 'boolean', description: '为 true 时输入后提交' }
         },
-        required: ['index', 'text'],
+        required: ['text'],
         additionalProperties: false
       },
-      summarize: (args) => `向 #${numberArg(args, 'index', -1, 0, 9999)} 输入文本`,
+      summarize: (args) => `输入文本 ${stringArg(args, 'selector').slice(0, 40) || `#${numberArg(args, 'index', -1, -1, 9999)}`}`,
       execute: async (args) => {
-        const index = numberArg(args, 'index', -1, 0, 9999)
-        if (index < 0) throw new ToolError('参数 index 必须是元素编号（数字）')
-        const text = stringArg(args, 'text', { required: true, max: 2000 })
-        return run('type', { index, text, submit: boolArg(args, 'submit') })
+        const index = numberArg(args, 'index', -1, -1, 9999)
+        const selector = stringArg(args, 'selector').slice(0, 500)
+        if (index < 0 && !selector) throw new ToolError('请提供 index 或 selector')
+        const text = stringArg(args, 'text', { required: true, max: 4000 })
+        return run('type', { index, selector, text, submit: boolArg(args, 'submit') })
+      }
+    },
+    {
+      name: 'browser_fill',
+      displayName: '填充输入框',
+      risk: 'network',
+      description:
+        '精确填充一个浏览器输入控件，不改动页面其他控件。传 index 或 selector 选择目标，value 为要填入的值；提交表单传 submit=true。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'browser_snapshot 返回的控件编号' },
+          selector: { type: 'string', description: 'CSS 选择器，和 index 二选一' },
+          value: { type: 'string', description: '要填入的值' },
+          submit: { type: 'boolean', description: '为 true 时提交所在表单' }
+        },
+        required: ['value'],
+        additionalProperties: false
+      },
+      summarize: (args) => `填充 ${stringArg(args, 'selector').slice(0, 40) || `#${numberArg(args, 'index', -1, -1, 9999)}`}`,
+      execute: async (args) => {
+        const index = numberArg(args, 'index', -1, -1, 9999)
+        const selector = stringArg(args, 'selector').slice(0, 500)
+        if (index < 0 && !selector) throw new ToolError('请提供 index 或 selector')
+        return run('fill', {
+          index,
+          selector,
+          value: stringArg(args, 'value', { required: true, max: 4000 }),
+          submit: boolArg(args, 'submit')
+        })
+      }
+    },
+    {
+      name: 'browser_autofill',
+      displayName: '自动补全表单',
+      risk: 'network',
+      description:
+        '本地识别页面表单并按字段名/标签/placeholder/name/id/autocomplete 自动填充多个输入框。fields 是对象，例如 {"用户名":"张三","邮箱":"a@b.com"}；未匹配字段会返回。submit=true 时提交第一个匹配表单。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          fields: {
+            type: 'object',
+            description: '字段名到值的映射，字段名支持 label、placeholder、name、id 或 autocomplete 的包含匹配'
+          },
+          submit: { type: 'boolean', description: '为 true 时提交表单' }
+        },
+        required: ['fields'],
+        additionalProperties: false
+      },
+      summarize: (args) => {
+        const fields = args.fields && typeof args.fields === 'object' ? Object.keys(args.fields) : []
+        return `自动补全 ${fields.length} 个字段`
+      },
+      execute: async (args) => {
+        const fields =
+          args.fields && typeof args.fields === 'object' && !Array.isArray(args.fields)
+            ? (args.fields as Record<string, unknown>)
+            : {}
+        if (!Object.keys(fields).length) throw new ToolError('fields 不能为空')
+        return run('autofill', { fields, submit: boolArg(args, 'submit') })
       }
     },
     {

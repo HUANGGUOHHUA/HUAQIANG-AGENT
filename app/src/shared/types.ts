@@ -276,6 +276,8 @@ export type BrowserAction =
   | 'snapshot'
   | 'click'
   | 'type'
+  | 'fill'
+  | 'autofill'
   | 'scroll'
   | 'back'
   | 'forward'

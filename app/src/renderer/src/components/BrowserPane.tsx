@@ -44,40 +44,186 @@ const START_PAGE =
 </html>`)
 
 const SNAPSHOT_SCRIPT = `(() => {
-  const selector = "a,button,input,textarea,select,[role='button'],[onclick]"
+  const selector = "a,button,input,textarea,select,summary,[role='button'],[role='link'],[role='textbox'],[role='checkbox'],[role='menuitem'],[contenteditable='true'],[onclick]"
   document.querySelectorAll('[data-hq-idx]').forEach((el) => el.removeAttribute('data-hq-idx'))
   const visible = (el) => {
     const rect = el.getBoundingClientRect()
     if (!rect.width || !rect.height) return false
     const style = window.getComputedStyle(el)
-    return style.display !== 'none' && style.visibility !== 'hidden'
+    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'
+  }
+  const textOf = (el) => {
+    const value = 'value' in el ? String(el.value ?? '') : ''
+    return (el.innerText || value || el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim()
+  }
+  const labelOf = (el) => {
+    try {
+      if (el.labels && el.labels.length) return el.labels[0].innerText || ''
+    } catch (error) {}
+    const labelledBy = el.getAttribute('aria-labelledby')
+    if (labelledBy) {
+      const target = document.getElementById(labelledBy)
+      if (target) return target.innerText || ''
+    }
+    const parentLabel = el.closest('label')
+    if (parentLabel) return parentLabel.innerText || ''
+    return el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || ''
+  }
+  const cssPath = (el) => {
+    if (el.id) return '#' + (window.CSS && CSS.escape ? CSS.escape(el.id) : el.id)
+    const parts = []
+    let node = el
+    while (node && node.nodeType === 1 && parts.length < 6) {
+      let part = node.tagName.toLowerCase()
+      const parent = node.parentElement
+      if (parent) {
+        const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName)
+        if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')'
+      }
+      parts.unshift(part)
+      node = node.parentElement
+    }
+    return parts.join(' > ')
   }
   const elements = []
   for (const el of document.querySelectorAll(selector)) {
-    if (elements.length >= 80) break
+    if (elements.length >= 120) break
     if (!visible(el)) continue
+    const type = (el.getAttribute('type') || el.getAttribute('role') || el.tagName).toLowerCase()
+    if (type === 'hidden' || el.getAttribute('aria-hidden') === 'true') continue
     const index = elements.length
     el.setAttribute('data-hq-idx', String(index))
+    const rect = el.getBoundingClientRect()
     const item = {
       index,
       tag: el.tagName.toLowerCase(),
-      text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80)
+      type,
+      role: el.getAttribute('role') || '',
+      text: textOf(el).slice(0, 120),
+      label: labelOf(el).replace(/\\s+/g, ' ').trim().slice(0, 120),
+      name: el.getAttribute('name') || '',
+      id: el.id || '',
+      placeholder: el.getAttribute('placeholder') || '',
+      ariaLabel: el.getAttribute('aria-label') || '',
+      autocomplete: el.getAttribute('autocomplete') || '',
+      value:
+        'value' in el
+          ? String(el.getAttribute('type') || '').toLowerCase() === 'password'
+            ? '••••••••'
+            : String(el.value ?? '').slice(0, 120)
+          : '',
+      href: el.getAttribute('href') || '',
+      disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
+      checked: 'checked' in el ? Boolean(el.checked) : false,
+      rect: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        centerX: Math.round(rect.left + rect.width / 2),
+        centerY: Math.round(rect.top + rect.height / 2)
+      },
+      selector: cssPath(el).slice(0, 300)
     }
-    const href = el.getAttribute('href')
-    if (href) item.href = href
-    const type = el.getAttribute('type')
-    if (type) item.type = type
-    const placeholder = el.getAttribute('placeholder')
-    if (placeholder) item.placeholder = placeholder
     elements.push(item)
   }
   return {
     url: location.href,
     title: document.title,
-    text: (document.body ? document.body.innerText : '').slice(0, 4000),
+    text: (document.body ? document.body.innerText : '').slice(0, 6000),
     elements
   }
 })()`
+
+const CONTROL_SELECTOR =
+  "a,button,input,textarea,select,summary,[role='button'],[role='link'],[role='textbox'],[role='checkbox'],[role='menuitem'],[contenteditable='true'],[onclick]"
+
+const SELECT_HELPER = `
+  const pickElement = (index, selector, text, role) => {
+    const all = Array.from(document.querySelectorAll(${JSON.stringify(CONTROL_SELECTOR)}))
+    if (Number.isInteger(index) && index >= 0) {
+      return document.querySelector('[data-hq-idx="' + index + '"]')
+    }
+    if (selector) {
+      try {
+        const bySelector = document.querySelector(selector)
+        if (bySelector) return bySelector
+      } catch (error) {}
+    }
+    const wantedText = String(text || '').replace(/\\s+/g, ' ').trim().toLowerCase()
+    const wantedRole = String(role || '').trim().toLowerCase()
+    if (wantedText) {
+      const exact = all.find((el) => {
+        const value = (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase()
+        return value === wantedText
+      })
+      if (exact) return exact
+      const partial = all.find((el) => {
+        const value = (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase()
+        return value.includes(wantedText)
+      })
+      if (partial) return partial
+    }
+    if (wantedRole) {
+      return all.find((el) => String(el.getAttribute('role') || el.tagName).toLowerCase() === wantedRole) || null
+    }
+    return null
+  }
+  const elementInfo = (el) => {
+    const r = el.getBoundingClientRect()
+    return {
+      tag: el.tagName.toLowerCase(),
+      text: (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+      selector: (() => {
+        if (el.id) return '#' + (window.CSS && CSS.escape ? CSS.escape(el.id) : el.id)
+        const parts = []
+        let node = el
+        while (node && node.nodeType === 1 && parts.length < 6) {
+          let part = node.tagName.toLowerCase()
+          const parent = node.parentElement
+          if (parent) {
+            const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName)
+            if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')'
+          }
+          parts.unshift(part)
+          node = node.parentElement
+        }
+        return parts.join(' > ')
+      })(),
+      rect: {
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+        centerX: Math.round(r.left + r.width / 2),
+        centerY: Math.round(r.top + r.height / 2)
+      }
+    }
+  }
+  const setElementValue = (el, value) => {
+    const text = String(value ?? '')
+    if (el.isContentEditable) {
+      el.focus()
+      el.innerText = text
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      el.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    }
+    if (el.tagName === 'SELECT') {
+      el.value = text
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      el.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    }
+    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set
+    if (setter) setter.call(el, text)
+    else el.value = text
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+    return true
+  }
+`
 
 interface BrowserTab {
   id: string
@@ -134,12 +280,6 @@ function resolveTarget(raw: string): string {
   // 形如 example.com / example.com/path 的按网址处理，其余当关键词搜索
   if (/^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]\S*)?$/.test(value)) return `https://${value}`
   return `https://www.baidu.com/s?wd=${encodeURIComponent(value)}`
-}
-
-function commandIndex(params: Record<string, unknown>): number {
-  const index = Number(params.index)
-  if (!Number.isInteger(index) || index < 0) throw new Error('无效的元素序号')
-  return index
 }
 
 interface BrowserTabViewProps {
@@ -447,19 +587,34 @@ export default function BrowserPane(): React.JSX.Element {
             break
           }
           case 'click': {
-            const index = commandIndex(params)
+            const index = Number.isInteger(Number(params.index)) ? Number(params.index) : -1
+            const selector = typeof params.selector === 'string' ? params.selector : ''
+            const text = typeof params.text === 'string' ? params.text : ''
+            const role = typeof params.role === 'string' ? params.role : ''
             const result = await view.executeJavaScript(`(() => {
-  const el = document.querySelector('[data-hq-idx="${index}"]')
-  if (!el) return null
-  el.scrollIntoView({ block: 'center' })
+  ${SELECT_HELPER}
+  const el = pickElement(${JSON.stringify(index)}, ${JSON.stringify(selector)}, ${JSON.stringify(text)}, ${JSON.stringify(role)})
+  if (!el) return { missing: true }
+  el.scrollIntoView({ block: 'center', inline: 'center' })
+  const info = elementInfo(el)
+  const rect = el.getBoundingClientRect()
+  const options = {
+    bubbles: true, cancelable: true, view: window, button: 0,
+    clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2
+  }
+  el.focus({ preventScroll: true })
+  if (window.PointerEvent) el.dispatchEvent(new PointerEvent('pointerdown', options))
+  el.dispatchEvent(new MouseEvent('mousedown', options))
+  if (window.PointerEvent) el.dispatchEvent(new PointerEvent('pointerup', options))
+  el.dispatchEvent(new MouseEvent('mouseup', options))
   el.click()
-  return { clicked: true, text: (el.innerText || el.value || '').trim().slice(0, 80) }
+  return { clicked: true, ...info }
 })()`)
-            if (!result) {
+            if (!result || (result as { missing?: boolean }).missing) {
               await window.hq.browserResult({
                 id: cmd.id,
                 ok: false,
-                error: `未找到序号 ${index} 对应的元素，请先重新获取页面快照`
+                error: '未找到匹配的控件，请先重新获取页面快照'
               })
             } else {
               await window.hq.browserResult({ id: cmd.id, ok: true, data: result })
@@ -467,26 +622,17 @@ export default function BrowserPane(): React.JSX.Element {
             break
           }
           case 'type': {
-            const index = commandIndex(params)
+            const index = Number.isInteger(Number(params.index)) ? Number(params.index) : -1
+            const selector = typeof params.selector === 'string' ? params.selector : ''
             const text = typeof params.text === 'string' ? params.text : String(params.text ?? '')
             const submit = params.submit === true
             const result = await view.executeJavaScript(`(() => {
-  const el = document.querySelector('[data-hq-idx="${index}"]')
-  if (!el) return null
-  el.scrollIntoView({ block: 'center' })
-  el.focus()
-  const text = ${JSON.stringify(text)}
-  const tag = el.tagName.toLowerCase()
-  if (tag === 'input' || tag === 'textarea') {
-    el.value = text
-    el.dispatchEvent(new Event('input', { bubbles: true }))
-    el.dispatchEvent(new Event('change', { bubbles: true }))
-  } else if (el.isContentEditable) {
-    el.innerText = text
-    el.dispatchEvent(new Event('input', { bubbles: true }))
-  } else {
-    return null
-  }
+  ${SELECT_HELPER}
+  const el = pickElement(${JSON.stringify(index)}, ${JSON.stringify(selector)}, '', '')
+  if (!el) return { missing: true }
+  el.scrollIntoView({ block: 'center', inline: 'center' })
+  el.focus({ preventScroll: true })
+  setElementValue(el, ${JSON.stringify(text)})
   if (${submit ? 'true' : 'false'}) {
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }))
     el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', bubbles: true }))
@@ -495,17 +641,82 @@ export default function BrowserPane(): React.JSX.Element {
       else el.form.submit()
     }
   }
-  return { typed: true }
+  return { typed: true, ...elementInfo(el) }
 })()`)
-            if (!result) {
+            if (!result || (result as { missing?: boolean }).missing) {
               await window.hq.browserResult({
                 id: cmd.id,
                 ok: false,
-                error: `未找到序号 ${index} 对应的输入元素`
+                error: '未找到匹配的输入控件，请先重新获取页面快照'
               })
             } else {
               await window.hq.browserResult({ id: cmd.id, ok: true, data: result })
             }
+            break
+          }
+          case 'fill': {
+            const index = Number.isInteger(Number(params.index)) ? Number(params.index) : -1
+            const selector = typeof params.selector === 'string' ? params.selector : ''
+            const value = typeof params.value === 'string' ? params.value : String(params.value ?? '')
+            const result = await view.executeJavaScript(`(() => {
+  ${SELECT_HELPER}
+  const el = pickElement(${JSON.stringify(index)}, ${JSON.stringify(selector)}, '', '')
+  if (!el) return { missing: true }
+  el.scrollIntoView({ block: 'center', inline: 'center' })
+  el.focus({ preventScroll: true })
+  setElementValue(el, ${JSON.stringify(value)})
+  return { filled: true, ...elementInfo(el) }
+})()`)
+            if (!result || (result as { missing?: boolean }).missing) {
+              await window.hq.browserResult({
+                id: cmd.id,
+                ok: false,
+                error: '未找到匹配的输入控件，请先重新获取页面快照'
+              })
+            } else {
+              await window.hq.browserResult({ id: cmd.id, ok: true, data: result })
+            }
+            break
+          }
+          case 'autofill': {
+            const fields = params.fields && typeof params.fields === 'object' ? params.fields : {}
+            const submit = params.submit === true
+            const result = await view.executeJavaScript(`(() => {
+  ${SELECT_HELPER}
+  const fields = ${JSON.stringify(fields)}
+  const entries = Object.entries(fields)
+  const all = Array.from(document.querySelectorAll('input,textarea,select,[contenteditable="true"]')).filter((candidate) => {
+    const r = candidate.getBoundingClientRect()
+    return r.width > 0 && r.height > 0
+  })
+  const matched = []
+  const unmatched = []
+  const keyOf = (el) => {
+    const label = (() => {
+      try { return el.labels && el.labels.length ? el.labels[0].innerText : '' } catch (error) { return '' }
+    })()
+    return [el.getAttribute('name'), el.id, el.getAttribute('placeholder'), el.getAttribute('aria-label'), el.getAttribute('autocomplete'), label]
+      .filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().toLowerCase()
+  }
+  for (const [key, value] of entries) {
+    const wanted = String(key).replace(/\\s+/g, ' ').trim().toLowerCase()
+    if (!wanted) continue
+    const el = all.find((candidate) => keyOf(candidate).includes(wanted))
+    if (!el) { unmatched.push(key); continue }
+    el.scrollIntoView({ block: 'center', inline: 'center' })
+    setElementValue(el, value)
+    matched.push({ key, ...elementInfo(el) })
+  }
+  if (submit) {
+    const form = all.find((el) => el.form)?.form
+    if (form) {
+      if (form.requestSubmit) form.requestSubmit()
+      else form.submit()
+    }
+  }
+  return { filled: matched.length, unmatched, matched }
+})()`)
+            await window.hq.browserResult({ id: cmd.id, ok: true, data: result })
             break
           }
           case 'scroll': {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+- `browser_snapshot` 本地读取浏览器控件的编号、标签、name/id、placeholder、autocomplete、值和坐标
+- `browser_click` 支持按 index、CSS selector、文字或 role 精确点击控件中心
+- 新增 `browser_fill` 单字段填充和 `browser_autofill` 按标签/placeholder/name/autocomplete 批量补全表单
+- 版本号更新至 1.1.1
+
 ## 1.1.0
 
 - 新增 `ui_click`：按控件编号、名称或类型自动定位并点击控件中心，减少手动坐标和点偏
