@@ -3,7 +3,7 @@
 ## 1.0.4
 
 - 新增 `screen_click`：截图、OCR 定位文字、点击一次完成，目标文字明确时不需要先截图再识别
-- OCR 增加行级坐标，直接支持按屏幕文字定位
+- OCR 增加行级坐标，`screen_ocr` 默认返回每行虚拟桌面绝对 x/y/width/height，直接支持按屏幕文字定位
 - 桌面识别改为目标优先：`ui_click(name=...)` 或 `screen_click(text=...)`，只有不知道目标时才 snapshot/OCR
 - `ui_click(name=...)` 在 UI Automation 找不到时自动回退到 OCR 屏幕文字并点击，不需要模型自己切换工具
 - 桌面鼠标操作在目标位置显示黄色高亮框和动作标签（移动/点击/拖拽/滚轮/控件名称）

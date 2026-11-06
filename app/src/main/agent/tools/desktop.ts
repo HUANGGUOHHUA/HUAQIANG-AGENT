@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import type { BrowserWindow } from 'electron'
 import { ocrImage, ocrImageBoxes } from '../../attachments/ocr'
 import type { ToolDefinition } from './types'
-import { ToolError, numberArg, stringArg, truncate } from './types'
+import { ToolError, boolArg, numberArg, stringArg, truncate } from './types'
 
 const run = promisify(execFile)
 
@@ -694,10 +694,19 @@ export function createDesktopTools(
       displayName: '读取屏幕文字',
       risk: 'read',
       description:
-        '截取整个虚拟桌面并用 Windows 本地 OCR 识别文字，返回文字内容和坐标范围。适用于需要先看屏幕内容、或 UI Automation 读不到的界面；只想点击某段文字时直接用 screen_click(text)。',
-      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      summarize: () => '截取全部显示器并识别文字',
-      execute: async () => {
+        '截取整个虚拟桌面并用 Windows 本地 OCR 识别文字。默认返回每行文字及其虚拟桌面绝对坐标（x/y/width/height），可直接用于判断位置；不需要坐标时传 with_boxes=false。只想点击某段文字时直接用 screen_click(text)。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          with_boxes: {
+            type: 'boolean',
+            description: '是否返回每行文字的 x/y/width/height，默认 true'
+          }
+        },
+        additionalProperties: false
+      },
+      summarize: () => '截取全部显示器并识别文字坐标',
+      execute: async (args) => {
         options.suspendOverlay?.()
         const win = getWindow()
         const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible())
@@ -720,17 +729,29 @@ export function createDesktopTools(
           options.resumeOverlay?.()
         }
         try {
-          const text = await ocrImage(path)
           const [x, y, width, height] = bounds.split(',').map((value) => Number(value))
+          const originX = Number.isFinite(x) ? x : 0
+          const originY = Number.isFinite(y) ? y : 0
           const range =
             Number.isFinite(x) && Number.isFinite(y)
               ? `虚拟桌面：x=${x} y=${y} ${width}x${height}`
               : '虚拟桌面：尺寸未知'
-          return {
-            output: truncate(
-              `${range}\n${text || '（未识别到文字）'}`,
-              40_000
+          const withBoxes = boolArg(args, 'with_boxes', true)
+          if (!withBoxes) {
+            const text = await ocrImage(path)
+            return {
+              output: truncate(`${range}\n${text || '（未识别到文字）'}`, 40_000)
+            }
+          }
+          const boxes = await ocrImageBoxes(path)
+          const lines = boxes.lines
+            .map(
+              (line, index) =>
+                `${index + 1}. x=${Math.round(originX + line.x)} y=${Math.round(originY + line.y)} w=${line.width} h=${line.height} | ${line.text}`
             )
+            .join('\n')
+          return {
+            output: truncate(`${range}\n${lines || '（未识别到文字）'}`, 40_000)
           }
         } finally {
           await unlink(path).catch(() => undefined)
