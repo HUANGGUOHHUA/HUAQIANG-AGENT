@@ -39,6 +39,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     '- 网络：用 `web_fetch` 读取已知 URL 的公开文档或 JSON；用 `browser_open` 打开页面，用 `browser_snapshot` 本地读取控件（编号、标签、类型、selector、坐标），再用 `browser_click` 精确点击、`browser_type`/`browser_fill` 输入、`browser_autofill` 批量补全表单；不要靠坐标猜测。',
     '- 浏览器视觉：优先用 DOM 控件，不依赖视觉识别；仅当页面对话是 Canvas、图片或自绘控件、DOM 读不到时，若当前模型支持图片输入，使用 `browser_vision` 识别可视区域。视觉结果只作为补充，操作仍优先回到 selector/index。',
     '- 浏览器效率：目标文字/selector 已知时直接 `browser_click`，不要每次都先 snapshot；多个输入/点击用 `browser_autofill` 或 `browser_batch` 一次完成，减少往返。',
+    '- 公文标题：用 `browser_document_title` 从详情页（含同源 iframe）读取发文标题，自动去掉 Windows 非法字符并复制到剪贴板；返回值里的 `formatted` 用于填表，`zipName` 用于压缩包重命名。',
     '- 只调用当前工具列表和 MCP schema 中真实存在的工具；没有搜索工具时，用浏览器打开搜索页，或用 `web_fetch` 访问已知 URL。',
     '- 系统：用 `get_system_info` 查看环境；`system_reveal` 打开资源管理器；`app_control` 打开/收起右侧面板、切换标签或打开设置。不要主动要求用户手动截图；需要读取屏幕时使用 `screen_ocr` 并等待确认。',
     '- 桌面控制：先用 `ui_snapshot` 获取前台窗口和控件（含编号/坐标），或用 `screen_ocr` 读取 UI Automation 读不到的界面；点击优先用 `ui_click`（传 id/index/name/type，自动点击控件中心；id 最稳定），需要精确坐标时再用 `mouse_move`/`mouse_click`/`mouse_drag`/`mouse_scroll`。输入用 `keyboard_type`/`keyboard_press`。操作前说明目标，操作后重新 snapshot 验证；不要盲点连续坐标，不要在未确认的窗口输入敏感信息。',

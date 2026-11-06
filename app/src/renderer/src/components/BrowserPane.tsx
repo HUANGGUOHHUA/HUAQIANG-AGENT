@@ -43,13 +43,51 @@ const START_PAGE =
 </body>
 </html>`)
 
+const FRAME_HELPER = `
+  const hqDocuments = () => {
+    const docs = []
+    const walk = (doc) => {
+      if (!doc || docs.indexOf(doc) >= 0) return
+      docs.push(doc)
+      let frames = []
+      try { frames = Array.from(doc.querySelectorAll('iframe,frame')) } catch (error) { frames = [] }
+      for (const frame of frames) {
+        try {
+          const child = frame.contentDocument
+          if (child) walk(child)
+        } catch (error) {}
+      }
+    }
+    walk(document)
+    return docs
+  }
+  const hqQueryAll = (selector) => {
+    const result = []
+    for (const doc of hqDocuments()) {
+      try { result.push(...Array.from(doc.querySelectorAll(selector))) } catch (error) {}
+    }
+    return result
+  }
+  const hqQuery = (selector) => {
+    for (const doc of hqDocuments()) {
+      try {
+        const found = doc.querySelector(selector)
+        if (found) return found
+      } catch (error) {}
+    }
+    return null
+  }
+`
+
 const SNAPSHOT_SCRIPT = `(() => {
+  ${FRAME_HELPER}
   const selector = "a,button,input,textarea,select,summary,[role='button'],[role='link'],[role='textbox'],[role='checkbox'],[role='menuitem'],[contenteditable='true'],[onclick]"
-  document.querySelectorAll('[data-hq-idx]').forEach((el) => el.removeAttribute('data-hq-idx'))
+  hqQueryAll('[data-hq-idx]').forEach((el) => el.removeAttribute('data-hq-idx'))
   const visible = (el) => {
     const rect = el.getBoundingClientRect()
     if (!rect.width || !rect.height) return false
-    const style = window.getComputedStyle(el)
+    const view = el.ownerDocument && el.ownerDocument.defaultView
+    const style = view ? view.getComputedStyle(el) : window.getComputedStyle(el)
     return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'
   }
   const textOf = (el) => {
@@ -62,7 +100,7 @@ const SNAPSHOT_SCRIPT = `(() => {
     } catch (error) {}
     const labelledBy = el.getAttribute('aria-labelledby')
     if (labelledBy) {
-      const target = document.getElementById(labelledBy)
+      const target = el.ownerDocument.getElementById(labelledBy)
       if (target) return target.innerText || ''
     }
     const parentLabel = el.closest('label')
@@ -85,8 +123,23 @@ const SNAPSHOT_SCRIPT = `(() => {
     }
     return parts.join(' > ')
   }
+  const frameOffset = (el) => {
+    let x = 0
+    let y = 0
+    let view = el.ownerDocument && el.ownerDocument.defaultView
+    while (view && view !== window) {
+      let frame = null
+      try { frame = view.frameElement } catch (error) { frame = null }
+      if (!frame) break
+      const r = frame.getBoundingClientRect()
+      x += r.left
+      y += r.top
+      view = frame.ownerDocument && frame.ownerDocument.defaultView
+    }
+    return { x, y }
+  }
   const elements = []
-  for (const el of document.querySelectorAll(selector)) {
+  for (const el of hqQueryAll(selector)) {
     if (elements.length >= 120) break
     if (!visible(el)) continue
     const type = (el.getAttribute('type') || el.getAttribute('role') || el.tagName).toLowerCase()
@@ -94,6 +147,7 @@ const SNAPSHOT_SCRIPT = `(() => {
     const index = elements.length
     el.setAttribute('data-hq-idx', String(index))
     const rect = el.getBoundingClientRect()
+    const offset = frameOffset(el)
     const item = {
       index,
       tag: el.tagName.toLowerCase(),
@@ -115,13 +169,19 @@ const SNAPSHOT_SCRIPT = `(() => {
       href: el.getAttribute('href') || '',
       disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'),
       checked: 'checked' in el ? Boolean(el.checked) : false,
+      frame: (() => {
+        try {
+          const frame = el.ownerDocument.defaultView && el.ownerDocument.defaultView.frameElement
+          return frame ? frame.id || frame.getAttribute('src') || 'iframe' : ''
+        } catch (error) { return '' }
+      })(),
       rect: {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
+        x: Math.round(offset.x + rect.left),
+        y: Math.round(offset.y + rect.top),
         width: Math.round(rect.width),
         height: Math.round(rect.height),
-        centerX: Math.round(rect.left + rect.width / 2),
-        centerY: Math.round(rect.top + rect.height / 2)
+        centerX: Math.round(offset.x + rect.left + rect.width / 2),
+        centerY: Math.round(offset.y + rect.top + rect.height / 2)
       },
       selector: cssPath(el).slice(0, 300)
     }
@@ -130,7 +190,10 @@ const SNAPSHOT_SCRIPT = `(() => {
   return {
     url: location.href,
     title: document.title,
-    text: (document.body ? document.body.innerText : '').slice(0, 6000),
+    text: hqDocuments()
+      .map((doc) => (doc.body ? doc.body.innerText : ''))
+      .join('\\n')
+      .slice(0, 6000),
     elements
   }
 })()`
@@ -139,15 +202,31 @@ const CONTROL_SELECTOR =
   "a,button,input,textarea,select,summary,[role='button'],[role='link'],[role='textbox'],[role='checkbox'],[role='menuitem'],[contenteditable='true'],[onclick]"
 
 const SELECT_HELPER = `
+  ${FRAME_HELPER}
+  const frameOffset = (el) => {
+    let x = 0
+    let y = 0
+    let view = el.ownerDocument && el.ownerDocument.defaultView
+    while (view && view !== window) {
+      let frame = null
+      try { frame = view.frameElement } catch (error) { frame = null }
+      if (!frame) break
+      const r = frame.getBoundingClientRect()
+      x += r.left
+      y += r.top
+      view = frame.ownerDocument && frame.ownerDocument.defaultView
+    }
+    return { x, y }
+  }
   const pickElement = (index, selector, text, role) => {
-    const all = Array.from(document.querySelectorAll(${JSON.stringify(CONTROL_SELECTOR)}))
+    const all = hqQueryAll(${JSON.stringify(CONTROL_SELECTOR)})
     if (Number.isInteger(index) && index >= 0) {
-      const byIndex = document.querySelector('[data-hq-idx="' + index + '"]')
+      const byIndex = hqQuery('[data-hq-idx="' + index + '"]')
       if (byIndex) return byIndex
     }
     if (selector) {
       try {
-        const bySelector = document.querySelector(selector)
+        const bySelector = hqQuery(selector)
         if (bySelector) return bySelector
       } catch (error) {}
     }
@@ -173,6 +252,7 @@ const SELECT_HELPER = `
   }
   const elementInfo = (el) => {
     const r = el.getBoundingClientRect()
+    const offset = frameOffset(el)
     return {
       tag: el.tagName.toLowerCase(),
       text: (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
@@ -193,12 +273,12 @@ const SELECT_HELPER = `
         return parts.join(' > ')
       })(),
       rect: {
-        x: Math.round(r.left),
-        y: Math.round(r.top),
+        x: Math.round(offset.x + r.left),
+        y: Math.round(offset.y + r.top),
         width: Math.round(r.width),
         height: Math.round(r.height),
-        centerX: Math.round(r.left + r.width / 2),
-        centerY: Math.round(r.top + r.height / 2)
+        centerX: Math.round(offset.x + r.left + r.width / 2),
+        centerY: Math.round(offset.y + r.top + r.height / 2)
       }
     }
   }
@@ -226,6 +306,39 @@ const SELECT_HELPER = `
     return true
   }
 `
+
+const documentTitleScript = (selector: string): string => `(() => {
+  ${FRAME_HELPER}
+  const selectors = [${JSON.stringify(selector || '#title')}, '#title', 'textarea#title', 'input[name="docTitle"]', '[name="docTitle"]', '.layui-textarea']
+  let el = null
+  let fallbackEl = null
+  let matched = ''
+  let fallbackSelector = ''
+  for (const candidate of selectors) {
+    if (!candidate) continue
+    const matches = hqQueryAll(candidate)
+    for (const candidateEl of matches) {
+      if (!fallbackEl) { fallbackEl = candidateEl; fallbackSelector = candidate }
+      const candidateValue = 'value' in candidateEl ? candidateEl.value : ''
+      const candidateText = String(candidateValue || candidateEl.innerText || candidateEl.textContent || '').trim()
+      if (candidateText) { el = candidateEl; matched = candidate; break }
+    }
+    if (el) break
+  }
+  if (!el && fallbackEl) { el = fallbackEl; matched = fallbackSelector }
+  if (!el) return { found: false, pageTitle: document.title }
+  const value = 'value' in el ? el.value : ''
+  const text = String(value || el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim()
+  return {
+    found: Boolean(text),
+    text,
+    selector: matched,
+    tag: el.tagName.toLowerCase(),
+    id: el.id || '',
+    readonly: Boolean(el.readOnly || el.getAttribute('readonly') === 'readonly'),
+    pageTitle: document.title
+  }
+})()`
 
 interface BrowserTab {
   id: string
@@ -604,6 +717,12 @@ export default function BrowserPane(): React.JSX.Element {
             })
             break
           }
+          case 'document-title': {
+            const selector = typeof params.selector === 'string' ? params.selector : '#title'
+            const data = await view.executeJavaScript(documentTitleScript(selector))
+            await window.hq.browserResult({ id: cmd.id, ok: true, data })
+            break
+          }
           case 'click': {
             const index = Number.isInteger(Number(params.index)) ? Number(params.index) : -1
             const selector = typeof params.selector === 'string' ? params.selector : ''
@@ -703,7 +822,7 @@ export default function BrowserPane(): React.JSX.Element {
   ${SELECT_HELPER}
   const fields = ${JSON.stringify(fields)}
   const entries = Object.entries(fields)
-  const all = Array.from(document.querySelectorAll('input,textarea,select,[contenteditable="true"]')).filter((candidate) => {
+  const all = hqQueryAll('input,textarea,select,[contenteditable="true"]').filter((candidate) => {
     const r = candidate.getBoundingClientRect()
     return r.width > 0 && r.height > 0
   })

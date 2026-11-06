@@ -17,6 +17,50 @@ function normalizeUrl(input: string): string {
   return url.toString()
 }
 
+export interface WindowsFilenameResult {
+  value: string
+  removed: string[]
+  truncated: boolean
+}
+
+/**
+ * Turn a document title into a Windows-safe filename (without an extension).
+ * Chinese punctuation is preserved; only characters Windows rejects, control
+ * characters, trailing dots/spaces and reserved device names are handled.
+ */
+export function sanitizeWindowsFilename(input: string, maxBytes = 180): WindowsFilenameResult {
+  const source = String(input ?? '')
+  const illegal = /[\u0000-\u001f<>:"/\\|?*]/g
+  const removed = Array.from(new Set(source.match(illegal) ?? []))
+  let value = source
+    .replace(illegal, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '')
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(value)) {
+    value = `_${value}`
+  }
+  const limit = Math.max(16, Math.min(240, maxBytes))
+  let truncated = false
+  let bytes = 0
+  let output = ''
+  for (const char of Array.from(value)) {
+    const size = Buffer.byteLength(char, 'utf8')
+    if (bytes + size > limit) {
+      truncated = true
+      break
+    }
+    output += char
+    bytes += size
+  }
+  output = output.replace(/[. ]+$/g, '').trim()
+  return {
+    value: output || '未命名公文',
+    removed,
+    truncated
+  }
+}
+
 export interface BrowserVisionShot {
   dataUrl: string
   width: number
@@ -34,7 +78,8 @@ export function createBrowserTools(
   bridge: BrowserBridge,
   getWindow: () => BrowserWindow | null,
   isNetworkLocked: () => boolean = () => false,
-  analyzeImage?: BrowserVisionAnalyzer
+  analyzeImage?: BrowserVisionAnalyzer,
+  copyText?: (text: string) => void
 ): ToolDefinition[] {
   const run = async (
     action:
@@ -93,6 +138,64 @@ export function createBrowserTools(
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       summarize: () => '读取当前页面内容',
       execute: async () => run('snapshot', {})
+    },
+    {
+      name: 'browser_document_title',
+      displayName: '读取并格式化标题',
+      risk: 'read',
+      description:
+        '从浏览器页面读取发文标题（默认 #title，自动搜索 iframe），按 Windows 文件名规则去掉 \\ / : * ? " < > |、控制字符、结尾点和空格、保留设备名，并复制到剪贴板。返回原始标题和格式化后的标题，可直接用于重命名 zip 或填表。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          selector: {
+            type: 'string',
+            description: '标题控件选择器，默认 #title；找不到时会尝试 textarea#title、[name=docTitle] 等'
+          }
+        },
+        additionalProperties: false
+      },
+      summarize: () => '读取并格式化发文标题',
+      execute: async (args) => {
+        const selector = stringArg(args, 'selector').slice(0, 500)
+        const data = (await bridge.command(getWindow(), 'document-title', {
+          selector
+        })) as {
+          found?: boolean
+          text?: string
+          selector?: string
+          tag?: string
+          id?: string
+          readonly?: boolean
+          pageTitle?: string
+        }
+        if (!data || !data.found || typeof data.text !== 'string' || !data.text.trim()) {
+          throw new ToolError('没有找到发文标题字段，请先确认详情页已打开')
+        }
+        const formatted = sanitizeWindowsFilename(data.text)
+        if (copyText) copyText(formatted.value)
+        return {
+          output: JSON.stringify(
+            {
+              raw: data.text,
+              formatted: formatted.value,
+              zipName: `${formatted.value}.zip`,
+              removed: formatted.removed,
+              truncated: formatted.truncated,
+              copied: Boolean(copyText),
+              source: {
+                selector: data.selector,
+                tag: data.tag,
+                id: data.id,
+                readonly: data.readonly,
+                pageTitle: data.pageTitle
+              }
+            },
+            null,
+            2
+          )
+        }
+      }
     },
     {
       name: 'browser_vision',

@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   globalShortcut,
   ipcMain,
@@ -886,7 +887,8 @@ function registerIpc(): void {
           browserBridge,
           () => mainWindow,
           () => settingsStore.getRaw().networkLocked,
-          analyzeBrowserImage
+          analyzeBrowserImage,
+          (text) => clipboard.writeText(text)
         ),
         createAppControlTool(appBridge, () => mainWindow),
         ...createDesktopTools(() => mainWindow, {

@@ -275,6 +275,7 @@ export type BrowserAction =
   | 'open'
   | 'snapshot'
   | 'screenshot'
+  | 'document-title'
   | 'click'
   | 'type'
   | 'fill'

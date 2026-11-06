@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { createBrowserTools, type BrowserVisionShot } from '../app/src/main/agent/tools/browser'
+import {
+  createBrowserTools,
+  sanitizeWindowsFilename,
+  type BrowserVisionShot
+} from '../app/src/main/agent/tools/browser'
 
 const context = {
   workspace: 'D:\\desk\\demo',
@@ -30,6 +34,48 @@ describe('browser control tools', () => {
       action: 'autofill',
       params: { fields: { 用户名: '张三' }, submit: true }
     })
+  })
+
+  it('formats a document title into a safe Windows zip name', () => {
+    const result = sanitizeWindowsFilename(
+      '  关于调整：2026年“校园体育”比赛/报名?的通知 * .  '
+    )
+    expect(result.value).toBe('关于调整：2026年“校园体育”比赛报名的通知')
+    expect(result.removed).toEqual(expect.arrayContaining(['/', '?', '*']))
+    expect(result.value).not.toMatch(/[<>:"/\\|?*]/)
+    expect(result.value.endsWith('.')).toBe(false)
+
+    expect(sanitizeWindowsFilename('CON').value).toBe('_CON')
+    expect(sanitizeWindowsFilename('a'.repeat(300)).truncated).toBe(true)
+  })
+
+  it('reads a title from the document and copies the formatted value', async () => {
+    let copied = ''
+    const bridge = {
+      command: async () => ({
+        found: true,
+        text: '发文标题: 2026年测试/通知?',
+        selector: '#title',
+        tag: 'textarea',
+        id: 'title',
+        readonly: true,
+        pageTitle: '显示公文'
+      })
+    }
+    const tools = createBrowserTools(
+      bridge as never,
+      () => null,
+      () => false,
+      undefined,
+      (text) => {
+        copied = text
+      }
+    )
+    const title = tools.find((tool) => tool.name === 'browser_document_title')!
+    const result = await title.execute({}, context)
+    expect(copied).toBe('发文标题 2026年测试通知')
+    expect(result.output).toContain('发文标题 2026年测试通知')
+    expect(result.output).toContain('"copied": true')
   })
 
   it('runs multiple browser steps in one tool call', async () => {
