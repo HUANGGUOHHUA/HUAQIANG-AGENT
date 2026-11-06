@@ -187,19 +187,36 @@ export async function streamOpenAI(
     body.tool_choice = 'auto'
   }
 
-  const response = await fetch(chatCompletionsUrl(config.baseUrl), {
+  const endpoint = chatCompletionsUrl(config.baseUrl)
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream, application/json',
+    ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {})
+  }
+  let response = await fetch(endpoint, {
     method: 'POST',
     signal: request.signal,
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream, application/json',
-      ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {})
-    },
+    headers,
     body: JSON.stringify(body)
   })
 
   if (!response.ok) {
-    throw new Error(await errorMessageFrom(response))
+    const message = await errorMessageFrom(response)
+    // Some OpenAI-compatible servers do not implement penalty fields. Retry
+    // once without them instead of making the model unusable.
+    if (response.status === 400 && /frequency_penalty|presence_penalty|unknown|unsupported/i.test(message)) {
+      delete body.frequency_penalty
+      delete body.presence_penalty
+      response = await fetch(endpoint, {
+        method: 'POST',
+        signal: request.signal,
+        headers,
+        body: JSON.stringify(body)
+      })
+      if (!response.ok) throw new Error(await errorMessageFrom(response))
+    } else {
+      throw new Error(message)
+    }
   }
 
   const contentType = (response.headers.get('content-type') || '').toLowerCase()
