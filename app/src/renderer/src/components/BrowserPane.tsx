@@ -77,9 +77,44 @@ const FRAME_HELPER = `
     }
     return null
   }
+  const flashElement = (el, label) => {
+    try {
+      const doc = el.ownerDocument
+      if (!doc || !doc.body) return
+      const rect = el.getBoundingClientRect()
+      if (!rect.width || !rect.height) return
+      const old = doc.getElementById('hq-action-highlight')
+      if (old) old.remove()
+      const box = doc.createElement('div')
+      box.id = 'hq-action-highlight'
+      box.textContent = label || ''
+      box.style.cssText = [
+        'position:fixed',
+        'pointer-events:none',
+        'z-index:2147483647',
+        'left:' + Math.max(0, rect.left - 4) + 'px',
+        'top:' + Math.max(0, rect.top - 4) + 'px',
+        'width:' + (rect.width + 8) + 'px',
+        'height:' + (rect.height + 8) + 'px',
+        'border:2px solid #fbbf24',
+        'border-radius:7px',
+        'background:rgba(251,191,36,.10)',
+        'box-shadow:0 0 0 3px rgba(251,191,36,.18),0 0 18px rgba(251,191,36,.65)',
+        'color:#451a03',
+        'font:600 11px/1.3 "Microsoft YaHei","Segoe UI",sans-serif',
+        'display:flex',
+        'align-items:flex-start',
+        'justify-content:flex-start',
+        'padding:2px 4px',
+        'box-sizing:border-box'
+      ].join(';')
+      doc.body.appendChild(box)
+      setTimeout(() => { try { box.remove() } catch (error) {} }, 1100)
+    } catch (error) {}
+  }
 `
 
-const SNAPSHOT_SCRIPT = `(() => {
+export const SNAPSHOT_SCRIPT = `(() => {
   ${FRAME_HELPER}
   const selector = "a,button,input,textarea,select,summary,[role='button'],[role='link'],[role='textbox'],[role='checkbox'],[role='menuitem'],[contenteditable='true'],[onclick]"
   hqQueryAll('[data-hq-idx]').forEach((el) => el.removeAttribute('data-hq-idx'))
@@ -282,41 +317,6 @@ const SELECT_HELPER = `
       }
     }
   }
-  const flashElement = (el, label) => {
-    try {
-      const doc = el.ownerDocument
-      if (!doc || !doc.body) return
-      const rect = el.getBoundingClientRect()
-      if (!rect.width || !rect.height) return
-      const old = doc.getElementById('hq-action-highlight')
-      if (old) old.remove()
-      const box = doc.createElement('div')
-      box.id = 'hq-action-highlight'
-      box.textContent = label || ''
-      box.style.cssText = [
-        'position:fixed',
-        'pointer-events:none',
-        'z-index:2147483647',
-        'left:' + Math.max(0, rect.left - 4) + 'px',
-        'top:' + Math.max(0, rect.top - 4) + 'px',
-        'width:' + (rect.width + 8) + 'px',
-        'height:' + (rect.height + 8) + 'px',
-        'border:2px solid #fbbf24',
-        'border-radius:7px',
-        'background:rgba(251,191,36,.10)',
-        'box-shadow:0 0 0 3px rgba(251,191,36,.18),0 0 18px rgba(251,191,36,.65)',
-        'color:#451a03',
-        'font:600 11px/1.3 "Microsoft YaHei","Segoe UI",sans-serif',
-        'display:flex',
-        'align-items:flex-start',
-        'justify-content:flex-start',
-        'padding:2px 4px',
-        'box-sizing:border-box'
-      ].join(';')
-      doc.body.appendChild(box)
-      setTimeout(() => { try { box.remove() } catch (error) {} }, 1100)
-    } catch (error) {}
-  }
   const setElementValue = (el, value) => {
     const text = String(value ?? '')
     if (el.isContentEditable) {
@@ -342,7 +342,7 @@ const SELECT_HELPER = `
   }
 `
 
-const documentTitleScript = (selector: string): string => `(() => {
+export const documentTitleScript = (selector: string): string => `(() => {
   ${FRAME_HELPER}
   const selectors = [${JSON.stringify(selector || '#title')}, '#title', 'textarea#title', 'input[name="docTitle"]', '[name="docTitle"]', '.layui-textarea']
   let el = null
