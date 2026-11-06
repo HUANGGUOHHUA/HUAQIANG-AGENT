@@ -34,6 +34,7 @@ public static class HqMouse
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT { public int X; public int Y; }
@@ -45,6 +46,9 @@ public static class HqMouse
     const uint MIDDLEDOWN = 0x0020;
     const uint MIDDLEUP = 0x0040;
     const uint WHEEL = 0x0800;
+    const uint MOVE = 0x0001;
+    const uint ABSOLUTE = 0x8000;
+    const uint VIRTUALDESK = 0x4000;
 
     static HqMouse()
     {
@@ -55,6 +59,26 @@ public static class HqMouse
             if (!SetProcessDpiAwarenessContext(new IntPtr(-4))) SetProcessDPIAware();
         }
         catch { try { SetProcessDPIAware(); } catch { } }
+    }
+
+    static void SetAbsolute(int x, int y)
+    {
+        // SendInput/mouse_event absolute movement is marked as injected, so the
+        // takeover mouse hook lets the agent move while physically locking the user.
+        int vx = GetSystemMetrics(76);
+        int vy = GetSystemMetrics(77);
+        int vw = GetSystemMetrics(78);
+        int vh = GetSystemMetrics(79);
+        if (vw <= 1 || vh <= 1)
+        {
+            if (!SetCursorPos(x, y)) throw new InvalidOperationException("SetCursorPos failed");
+            return;
+        }
+        int nx = (int)Math.Round((x - vx) * 65535.0 / (vw - 1));
+        int ny = (int)Math.Round((y - vy) * 65535.0 / (vh - 1));
+        nx = Math.Max(0, Math.Min(65535, nx));
+        ny = Math.Max(0, Math.Min(65535, ny));
+        mouse_event(MOVE | ABSOLUTE | VIRTUALDESK, (uint)nx, (uint)ny, 0, UIntPtr.Zero);
     }
 
     public static void MoveTo(int x, int y, int duration)
@@ -68,10 +92,10 @@ public static class HqMouse
             t = t * t * (3.0 - 2.0 * t);
             int nx = start.X + (int)Math.Round((x - start.X) * t);
             int ny = start.Y + (int)Math.Round((y - start.Y) * t);
-            if (!SetCursorPos(nx, ny)) throw new InvalidOperationException("SetCursorPos failed");
+            SetAbsolute(nx, ny);
             Thread.Sleep(Math.Max(4, duration / steps));
         }
-        SetCursorPos(x, y);
+        SetAbsolute(x, y);
     }
 
     public static void Click(int x, int y, string button, int clicks, int duration)
@@ -105,10 +129,10 @@ public static class HqMouse
             t = t * t * (3.0 - 2.0 * t);
             int x = x1 + (int)Math.Round((x2 - x1) * t);
             int y = y1 + (int)Math.Round((y2 - y1) * t);
-            SetCursorPos(x, y);
+            SetAbsolute(x, y);
             Thread.Sleep(Math.Max(4, duration / steps));
         }
-        SetCursorPos(x2, y2);
+        SetAbsolute(x2, y2);
         Thread.Sleep(120);
         mouse_event(LEFTUP, 0, 0, 0, UIntPtr.Zero);
     }
@@ -234,7 +258,7 @@ if ($Action -eq 'type') {
 Write-Output 'ok'
 `
 
-const UI_SCRIPT = String.raw`param([int]$Max = 80)
+const UI_SCRIPT = String.raw`param([int]$Max = 80, [int]$ExcludePid = 0)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient
@@ -280,6 +304,14 @@ foreach ($s in [System.Windows.Forms.Screen]::AllScreens) {
   }
 }
 
+function Get-ElementId($element) {
+  try {
+    $id = $element.GetRuntimeId()
+    if ($id) { return ($id -join '.') }
+  } catch { }
+  return ''
+}
+
 function Get-Rect($element) {
   try {
     $r = $element.Current.BoundingRectangle
@@ -301,12 +333,17 @@ foreach ($window in $windows) {
   if ($items.Count -ge $Max) { break }
   try {
     if ($window.Current.IsOffscreen) { continue }
+    $processId = 0
+    try { $processId = [int]$window.Current.ProcessId } catch { }
+    if ($ExcludePid -gt 0 -and $processId -eq $ExcludePid) { continue }
     $rect = Get-Rect $window
     if ($null -eq $rect) { continue }
     $windowName = $window.Current.Name
+    if ($windowName -match '华强以太正在控制|退出请按|鼠标已锁定') { continue }
     $handle = $window.Current.NativeWindowHandle
     $items += [pscustomobject]@{
       index = $items.Count
+      id = (Get-ElementId $window)
       kind = 'window'
       name = $windowName
       type = 'Window'
@@ -324,12 +361,14 @@ foreach ($window in $windows) {
         $type = ($child.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '')
         if (@('Button','Edit','ComboBox','CheckBox','RadioButton','MenuItem','ListItem','TabItem','TreeItem','Hyperlink','Document','Text') -notcontains $type) { continue }
         $name = $child.Current.Name
+        if ($name -match '华强以太正在控制|退出请按|鼠标已锁定') { continue }
         $aid = $child.Current.AutomationId
         if ([string]::IsNullOrWhiteSpace($name) -and [string]::IsNullOrWhiteSpace($aid)) { continue }
         $crect = Get-Rect $child
         if ($null -eq $crect) { continue }
         $items += [pscustomobject]@{
           index = $items.Count
+          id = (Get-ElementId $child)
           kind = 'control'
           window = $windowName
           name = $name
@@ -394,6 +433,8 @@ Write-Output "$($bounds.X),$($bounds.Y),$($bounds.Width),$($bounds.Height)"
 `
 
 const POST_MOUSE_DELAY_MS = 300
+const UI_CACHE_TTL_MS = 1_500
+let uiCache: { items: UiSnapshotItem[]; at: number } | null = null
 
 function waitFor(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -450,6 +491,7 @@ async function runPowerShell(
 
 interface UiSnapshotItem {
   index?: number
+  id?: string
   kind?: string
   name?: string
   type?: string
@@ -472,6 +514,10 @@ function pickUiItem(
   items: UiSnapshotItem[],
   args: Record<string, unknown>
 ): UiSnapshotItem | null {
+  const wantedId = stringArg(args, 'id').trim()
+  if (wantedId) {
+    return items.find((item) => item.id === wantedId) ?? null
+  }
   const index = numberArg(args, 'index', -1, -1, 100_000)
   if (index >= 0) {
     return items.find((item) => item.index === index) ?? null
@@ -532,7 +578,14 @@ export function createDesktopTools(
       summarize: () => '识别当前桌面窗口和控件',
       execute: async (args) => {
         const max = numberArg(args, 'max_items', 80, 20, 150)
-        const output = await runPowerShell('ui-snapshot', UI_SCRIPT, ['-Max', String(max)], 25_000)
+        const output = await runPowerShell(
+          'ui-snapshot',
+          UI_SCRIPT,
+          ['-Max', String(max), '-ExcludePid', String(process.pid)],
+          25_000
+        )
+        const items = parseUiItems(output)
+        uiCache = { items, at: Date.now() }
         return { output: output || '{"items":[]}' }
       }
     },
@@ -589,11 +642,12 @@ export function createDesktopTools(
       displayName: '识别并点击',
       risk: 'exec',
       description:
-        '先用 UI Automation 识别界面，再点击匹配的控件中心。优先使用这个工具，而不是手动填坐标。可以按 index（ui_snapshot 返回的编号）、控件名称 name，或控件类型 type 选择目标；name 支持包含匹配。点击后会自动等待并返回实际点击位置。',
+        '先用 UI Automation 识别界面，再点击匹配的控件中心。优先使用这个工具，而不是手动填坐标。可以按 id（ui_snapshot 的稳定控件标识）、index（最近一次 snapshot 的编号）、控件名称 name，或控件类型 type 选择目标；name 支持包含匹配。点击后会自动等待并返回实际点击位置。',
       inputSchema: {
         type: 'object',
         properties: {
-          index: { type: 'number', description: 'ui_snapshot 返回的控件编号，优先级最高' },
+          id: { type: 'string', description: 'ui_snapshot 返回的稳定控件 id，优先级最高' },
+          index: { type: 'number', description: '最近一次 ui_snapshot 的控件编号' },
           name: { type: 'string', description: '控件名称，支持包含匹配，例如“保存”' },
           type: { type: 'string', description: '控件类型，例如 Button、Edit、MenuItem' },
           button: { type: 'string', enum: ['left', 'right', 'middle'], description: '鼠标按键，默认 left' },
@@ -603,6 +657,8 @@ export function createDesktopTools(
         additionalProperties: false
       },
       summarize: (args) => {
+        const id = stringArg(args, 'id').slice(0, 40)
+        if (id) return `识别并点击控件 ${id}`
         const index = numberArg(args, 'index', -1, -1, 100_000)
         if (index >= 0) return `识别并点击控件 #${index}`
         const name = stringArg(args, 'name').slice(0, 40)
@@ -610,17 +666,28 @@ export function createDesktopTools(
         return `识别并点击 ${type ? `${type} ` : ''}${name || '?'}`
       },
       execute: async (args, context) => {
-        const snapshot = await runPowerShell(
-          'ui-snapshot',
-          UI_SCRIPT,
-          ['-Max', '150'],
-          25_000
-        )
-        const items = parseUiItems(snapshot)
+        const refresh = async (): Promise<UiSnapshotItem[]> => {
+          const snapshot = await runPowerShell(
+            'ui-snapshot',
+            UI_SCRIPT,
+            ['-Max', '150', '-ExcludePid', String(process.pid)],
+            25_000
+          )
+          const items = parseUiItems(snapshot)
+          uiCache = { items, at: Date.now() }
+          return items
+        }
+        const cached =
+          uiCache && Date.now() - uiCache.at <= UI_CACHE_TTL_MS ? uiCache.items : null
+        let items = cached ?? (await refresh())
+        let item = pickUiItem(items, args)
+        if (!item && cached) {
+          items = await refresh()
+          item = pickUiItem(items, args)
+        }
         if (!items.length) {
           throw new ToolError('没有识别到可点击的窗口或控件')
         }
-        const item = pickUiItem(items, args)
         if (!item) {
           const names = items
             .filter((entry) => entry.kind === 'control')
@@ -647,6 +714,7 @@ export function createDesktopTools(
           12_000
         )
         await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+        uiCache = null
         return {
           output: `已点击 ${item.type ?? '控件'}「${item.name ?? ''}」中心 (${x}, ${y})`
         }
