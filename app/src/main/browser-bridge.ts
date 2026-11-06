@@ -3,7 +3,9 @@ import { BrowserWindow, ipcMain } from 'electron'
 import type { BrowserAction, BrowserCommandResult } from '../shared/types'
 
 const COMMAND_TIMEOUT_MS = 30_000
-const MAX_DATA_CHARS = 50_000
+// Screenshots for the optional vision path can be several megabytes as data
+// URLs; text snapshots remain small. Cap at 8M characters to avoid unbounded IPC.
+const MAX_DATA_CHARS = 8_000_000
 
 interface PendingCommand {
   resolve: (data: unknown) => void

@@ -274,6 +274,7 @@ export type ApprovalDecision = 'deny' | 'allow' | 'always'
 export type BrowserAction =
   | 'open'
   | 'snapshot'
+  | 'screenshot'
   | 'click'
   | 'type'
   | 'fill'

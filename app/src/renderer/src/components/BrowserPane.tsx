@@ -586,6 +586,22 @@ export default function BrowserPane(): React.JSX.Element {
             await window.hq.browserResult({ id: cmd.id, ok: true, data })
             break
           }
+          case 'screenshot': {
+            const image = await view.capturePage()
+            const size = image.getSize()
+            await window.hq.browserResult({
+              id: cmd.id,
+              ok: true,
+              data: {
+                dataUrl: image.toDataURL(),
+                width: size.width,
+                height: size.height,
+                url: view.getURL(),
+                title: await view.executeJavaScript('document.title')
+              }
+            })
+            break
+          }
           case 'click': {
             const index = Number.isInteger(Number(params.index)) ? Number(params.index) : -1
             const selector = typeof params.selector === 'string' ? params.selector : ''

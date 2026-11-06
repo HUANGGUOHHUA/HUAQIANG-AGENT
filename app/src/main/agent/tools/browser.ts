@@ -17,15 +17,30 @@ function normalizeUrl(input: string): string {
   return url.toString()
 }
 
+export interface BrowserVisionShot {
+  dataUrl: string
+  width: number
+  height: number
+  url?: string
+  title?: string
+}
+
+export type BrowserVisionAnalyzer = (
+  question: string,
+  shot: BrowserVisionShot
+) => Promise<string>
+
 export function createBrowserTools(
   bridge: BrowserBridge,
   getWindow: () => BrowserWindow | null,
-  isNetworkLocked: () => boolean = () => false
+  isNetworkLocked: () => boolean = () => false,
+  analyzeImage?: BrowserVisionAnalyzer
 ): ToolDefinition[] {
   const run = async (
     action:
       | 'open'
       | 'snapshot'
+      | 'screenshot'
       | 'click'
       | 'type'
       | 'fill'
@@ -78,6 +93,36 @@ export function createBrowserTools(
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       summarize: () => '读取当前页面内容',
       execute: async () => run('snapshot', {})
+    },
+    {
+      name: 'browser_vision',
+      displayName: '视觉识别页面',
+      risk: 'network',
+      description:
+        '截取当前浏览器可视区域，交给当前模型做视觉识别。仅当模型支持图片输入时使用；优先用 browser_snapshot 读取 DOM 控件，Canvas、图片、复杂自绘界面再用本工具。question 说明要识别的目标或文字。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          question: {
+            type: 'string',
+            description: '要模型从截图中识别的目标，例如“找出登录按钮的位置”'
+          }
+        },
+        required: ['question'],
+        additionalProperties: false
+      },
+      summarize: (args) => `视觉识别页面：${stringArg(args, 'question').slice(0, 60) || '?'}`,
+      execute: async (args) => {
+        if (!analyzeImage) throw new ToolError('当前没有可用的视觉分析器')
+        const question = stringArg(args, 'question', { required: true, max: 2000 })
+        if (!question.trim()) throw new ToolError('question 不能为空')
+        const shot = (await bridge.command(getWindow(), 'screenshot', {})) as BrowserVisionShot
+        if (!shot || typeof shot.dataUrl !== 'string') {
+          throw new ToolError('浏览器截图失败')
+        }
+        const text = await analyzeImage(question, shot)
+        return { output: text || '（模型没有返回视觉识别结果）' }
+      }
     },
     {
       name: 'browser_click',

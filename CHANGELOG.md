@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2
+
+- 新增 `browser_vision`：不依赖视觉，DOM 优先；当前模型支持图片输入时自动使用页面截图做视觉识别
+- 浏览器截图通过本地 webview 捕获，支持 Canvas、图片和自绘控件，视觉失败时仍可回退 DOM
+- 版本号更新至 1.1.2
+
 ## 1.1.1
 
 - `browser_snapshot` 本地读取浏览器控件的编号、标签、name/id、placeholder、autocomplete、值和坐标

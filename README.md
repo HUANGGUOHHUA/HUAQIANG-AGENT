@@ -12,7 +12,7 @@
 
 - **本地桌面应用**：Electron + React，不依赖浏览器打开
 - **Agent 工具调用**：文件读写、精确编辑、搜索、PowerShell、系统信息、网页抓取
-- **浏览器控件**：本地读取页面按钮/输入框/链接的名称、编号、selector 和坐标，支持精确点击、填充和表单自动补全
+- **浏览器控件**：本地读取页面按钮/输入框/链接的名称、编号、selector 和坐标，支持精确点击、填充和表单自动补全；模型有视觉时可选截图识别
 - **桌面控制**：一次确认接管屏幕和鼠标，接管期间物理鼠标锁定、高亮边框不被截图捕获、多显示器识别、按控件名称/编号点击、300ms 操作节奏、拟人点击、平滑移动、拖拽、滚轮和键盘输入，ESC 随时中止
 - **断网锁**：模型 API 仍可用，但禁止模型访问网页、浏览器导航、联网 MCP 和联网命令
 - **多模型配置**：OpenAI 兼容接口 / Anthropic Messages，支持读取 `/models`
@@ -309,8 +309,8 @@ npm.cmd run installer
 
 ```text
 output/
-  HuaqiangAgent-1.1.1-portable.exe
-  HuaqiangAgent-1.1.1-setup.exe
+  HuaqiangAgent-1.1.2-portable.exe
+  HuaqiangAgent-1.1.2-setup.exe
   win-unpacked/
 ```
 
