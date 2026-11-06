@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import type { BrowserWindow } from 'electron'
-import { ocrImage } from '../../attachments/ocr'
+import { ocrImage, ocrImageBoxes } from '../../attachments/ocr'
 import type { ToolDefinition } from './types'
 import { ToolError, numberArg, stringArg, truncate } from './types'
 
@@ -588,13 +588,44 @@ export function createDesktopTools(
   getWindow: () => BrowserWindow | null,
   options: DesktopToolOptions = {}
 ): ToolDefinition[] {
+  const captureVirtualScreen = async (): Promise<{
+    path: string
+    bounds: { x: number; y: number; width: number; height: number }
+  }> => {
+    options.suspendOverlay?.()
+    const win = getWindow()
+    const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible())
+    if (wasVisible) win!.hide()
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      const path = join(tmpdir(), `huaqiang-screen-${Date.now()}.png`)
+      const raw = await runPowerShell('desktop-screen', SCREEN_SCRIPT, ['-Path', path], 20_000)
+      const [x, y, width, height] = raw.split(',').map((value) => Number(value))
+      return {
+        path,
+        bounds: {
+          x: Number.isFinite(x) ? x : 0,
+          y: Number.isFinite(y) ? y : 0,
+          width: Number.isFinite(width) ? width : 0,
+          height: Number.isFinite(height) ? height : 0
+        }
+      }
+    } finally {
+      if (wasVisible && win && !win.isDestroyed()) {
+        win.show()
+        win.focus()
+      }
+      options.resumeOverlay?.()
+    }
+  }
+
   return [
     {
       name: 'ui_snapshot',
       displayName: '识别界面',
       risk: 'read',
       description:
-        '读取当前所有显示器上的前台窗口和可见控件，返回虚拟桌面范围、显示器列表、控件类型、名称、AutomationId、屏幕坐标（物理像素）和大小。点击或输入前先用它确认目标；操作后应重新读取以验证结果。参数 max_items：最多返回多少个条目，默认 80。',
+        '读取当前所有显示器上的前台窗口和可见控件，返回虚拟桌面范围、显示器列表、控件类型、名称、AutomationId、屏幕坐标（物理像素）和大小。不知道目标控件时才用它；目标名称明确可直接 ui_click(name) 或 screen_click(text)。参数 max_items：最多返回多少个条目，默认 80。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -621,7 +652,7 @@ export function createDesktopTools(
       displayName: '读取屏幕文字',
       risk: 'read',
       description:
-        '截取整个虚拟桌面（包含所有显示器）并用 Windows 本地 OCR 识别文字。适用于 UI Automation 读不到的界面（画布、游戏、远程桌面、图片文字）。返回虚拟桌面坐标范围和识别文本，不保存截图。',
+        '截取整个虚拟桌面并用 Windows 本地 OCR 识别文字，返回文字内容和坐标范围。适用于需要先看屏幕内容、或 UI Automation 读不到的界面；只想点击某段文字时直接用 screen_click(text)。',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       summarize: () => '截取全部显示器并识别文字',
       execute: async () => {
@@ -665,11 +696,70 @@ export function createDesktopTools(
       }
     },
     {
+      name: 'screen_click',
+      displayName: '识别文字并点击',
+      risk: 'exec',
+      description:
+        '一次完成截图、OCR 和点击：在屏幕上找到指定文字，直接点击文字中心。目标文字明确时优先使用它，不需要先 screen_ocr 或 ui_snapshot。适合按钮、菜单、网页文字和 UI Automation 读不到的界面。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '屏幕上要点击的文字，例如“批量下载”' },
+          button: { type: 'string', enum: ['left', 'right', 'middle'], description: '鼠标按键，默认 left' },
+          clicks: { type: 'number', description: '点击次数，1-3，默认 1' },
+          duration_ms: { type: 'number', description: '平滑移动时长，默认 320 毫秒' }
+        },
+        required: ['text'],
+        additionalProperties: false
+      },
+      summarize: (args) => `识别并点击文字「${stringArg(args, 'text').slice(0, 40)}」`,
+      execute: async (args, context) => {
+        const text = stringArg(args, 'text', { required: true, max: 200 }).trim()
+        if (!text) throw new ToolError('text 不能为空')
+        const shot = await captureVirtualScreen()
+        try {
+          const ocr = await ocrImageBoxes(shot.path)
+          const normalize = (value: string): string =>
+            value.replace(/\s+/g, '').toLowerCase()
+          const wanted = normalize(text)
+          const candidates = ocr.lines.filter((line) => normalize(line.text).includes(wanted))
+          const line = candidates[0]
+          if (!line) {
+            const sample = ocr.lines
+              .slice(0, 10)
+              .map((item) => item.text)
+              .join('、')
+            throw new ToolError(`没有找到文字「${text}」${sample ? `。屏幕文字：${sample}` : ''}`)
+          }
+          const x = Math.round(shot.bounds.x + line.x + line.width / 2)
+          const y = Math.round(shot.bounds.y + line.y + line.height / 2)
+          options.highlight?.({
+            x,
+            y,
+            width: line.width,
+            height: line.height,
+            label: line.text
+          })
+          await runPowerShell(
+            'desktop-mouse',
+            MOUSE_SCRIPT,
+            mouseArgs('click', { ...args, x, y }),
+            12_000
+          )
+          await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+          uiCache = null
+          return { output: `已点击文字「${line.text}」中心 (${x}, ${y})` }
+        } finally {
+          await unlink(shot.path).catch(() => undefined)
+        }
+      }
+    },
+    {
       name: 'ui_click',
       displayName: '识别并点击',
       risk: 'exec',
       description:
-        '先用 UI Automation 识别界面，再点击匹配的控件中心。优先使用这个工具，而不是手动填坐标。可以按 id（ui_snapshot 的稳定控件标识）、index（最近一次 snapshot 的编号）、控件名称 name，或控件类型 type 选择目标；name 支持包含匹配。点击后会自动等待并返回实际点击位置。',
+        '按名称、id 或类型点击 UI Automation 控件中心。名称明确时直接 ui_click(name="批量下载")，不必先 ui_snapshot；只有不知道目标时才先读取。id 最稳定，name 支持包含匹配，index 只对最近一次快照有效。',
       inputSchema: {
         type: 'object',
         properties: {

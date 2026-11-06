@@ -7,7 +7,7 @@ import { promisify } from 'node:util'
 
 const run = promisify(execFile)
 
-const OCR_SCRIPT = String.raw`param([string]$Path)
+const OCR_SCRIPT = String.raw`param([string]$Path, [switch]$Json)
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -31,7 +31,38 @@ $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.S
 $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if (-not $engine) { throw "No Windows OCR language is installed" }
 $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-$result.Text
+if ($Json) {
+  $lines = @()
+  foreach ($line in $result.Lines) {
+    $words = @($line.Words)
+    if ($words.Count -eq 0) { continue }
+    $left = [double]::PositiveInfinity
+    $top = [double]::PositiveInfinity
+    $right = 0.0
+    $bottom = 0.0
+    foreach ($word in $words) {
+      $r = $word.BoundingRect
+      $left = [Math]::Min($left, $r.X)
+      $top = [Math]::Min($top, $r.Y)
+      $right = [Math]::Max($right, $r.X + $r.Width)
+      $bottom = [Math]::Max($bottom, $r.Y + $r.Height)
+    }
+    $lines += [pscustomobject]@{
+      text = $line.Text
+      x = [Math]::Round($left)
+      y = [Math]::Round($top)
+      width = [Math]::Round($right - $left)
+      height = [Math]::Round($bottom - $top)
+    }
+  }
+  [pscustomobject]@{
+    width = [int]$bitmap.PixelWidth
+    height = [int]$bitmap.PixelHeight
+    lines = @($lines)
+  } | ConvertTo-Json -Depth 4 -Compress
+} else {
+  $result.Text
+}
 `
 
 let scriptReady: Promise<string> | null = null
@@ -62,6 +93,51 @@ export function normalizeOcrText(text: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim()
     .slice(0, 100_000)
+}
+
+export interface OcrLineBox {
+  text: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface OcrBoxes {
+  width: number
+  height: number
+  lines: OcrLineBox[]
+}
+
+/** OCR an image and return line bounding boxes in image pixels. */
+export async function ocrImageBoxes(path: string): Promise<OcrBoxes> {
+  const script = await ensureScript()
+  const { stdout } = await run(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', path, '-Json'],
+    { timeout: 45_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }
+  )
+  try {
+    const parsed = JSON.parse(stdout) as Partial<OcrBoxes>
+    const lines = Array.isArray(parsed.lines)
+      ? parsed.lines
+          .map((line) => ({
+            text: String(line?.text ?? '').trim(),
+            x: Number(line?.x ?? 0),
+            y: Number(line?.y ?? 0),
+            width: Number(line?.width ?? 0),
+            height: Number(line?.height ?? 0)
+          }))
+          .filter((line) => line.text && line.width > 0 && line.height > 0)
+      : []
+    return {
+      width: Number(parsed.width ?? 0),
+      height: Number(parsed.height ?? 0),
+      lines
+    }
+  } catch {
+    return { width: 0, height: 0, lines: [] }
+  }
 }
 
 /** OCR an image with the built-in Windows.Media.Ocr engine. */
