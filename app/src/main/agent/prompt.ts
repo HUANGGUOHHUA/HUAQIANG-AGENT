@@ -46,7 +46,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     '- 屏幕文字：默认开源 RapidOCR，尽量先裁剪目标区域：`screen_ocr(region_x=..., region_y=..., region_width=..., region_height=...)`；只有 RapidOCR 报错、超时或不可用时才用 `engine="windows"` 回退。已知文字要快速点击用 `screen_click(text=...)`。',
     '- 桌面控件：用 `ui_snapshot` 读取窗口/控件；优先 `ui_click(id=...)` 或 `ui_click(name=...)`，`index` 只对最近快照有效。',
     '- 视觉补充：普通控件优先真实外框；Canvas、自绘按钮或图片才用 `screen_edges` 获取边缘，整体布局/图标才用 `screen_vision`（需视觉模型）。边缘和视觉结果不保证语义准确，点击前仍需确认。',
-    '- 通用视觉操作：没有 UIA/DOM 的桌面应用（QQ、微信、远程桌面）用 `screen_act(instruction=...)`，它截屏交给视觉模型并执行一个 JSON 动作，下一步重新截图；不要为单个应用写专用自动化代码。视觉模型不支持图片时明确说明，改用 UIA/OCR。',
+    '- 通用视觉操作：没有 UIA/DOM 的桌面应用（QQ、微信、远程桌面）用 `screen_act(instruction=...)`，它截屏交给视觉模型并执行一个 JSON 动作，下一步重新截图；不要为单个应用写专用自动化代码。发送文件时让模型返回 `{"action":"paste_file","path":"文件绝对路径"}`，程序会临时设置文件剪贴板、粘贴并恢复原剪贴板。视觉模型不支持图片时明确说明，改用 UIA/OCR。',
     '- 验证：普通点击后不必重新 snapshot；只有打开新页面、弹窗、窗口切换、页面明显变化或结果不确定时才重新读取。检查返回值、高亮位置和页面状态即可。',
     '- 接管：首次桌面操作请求一次“接管屏幕和鼠标”的确认；批准后本轮直接执行。用户按 ESC 会中止整个任务；用户拒绝后不要换坐标、换窗口或换按键绕过。',
     '- 多显示器：鼠标坐标是虚拟桌面物理像素，允许负坐标；用 `virtualScreen`/`displays` 先确认目标屏幕。',

@@ -43,6 +43,9 @@ describe('desktop vision', () => {
       action: 'done',
       message: '完成'
     })
+    expect(
+      parseVisualAction('{"action":"paste_file","path":"D:\\\\tmp\\\\a.zip"}')
+    ).toEqual({ action: 'paste_file', paths: ['D:\\tmp\\a.zip'] })
 
     const tools = createDesktopTools(() => null, {
       analyzeImage: async () => '{"action":"done","message":"视觉步骤完成"}'

@@ -2,7 +2,8 @@
 
 ## 1.0.4
 
-- 新增 `screen_act`：通用视觉桌面操作，视觉模型返回一个 JSON 动作，程序执行点击/输入/按键，不需要为 QQ 等单个应用写专用代码
+- 新增 `screen_act`：通用视觉桌面操作，视觉模型返回一个 JSON 动作，程序执行点击/输入/按键/文件粘贴，不需要为 QQ 等单个应用写专用代码
+- `screen_act` 支持 `paste_file`：临时把文件放入剪贴板并 Ctrl+V，粘贴后恢复原剪贴板
 - 审批弹出时自动释放接管覆盖层和鼠标锁，审批完成后自动恢复，避免审批被覆盖层挡住
 - 集成轻量 RapidOCRLite 原生引擎（PP-OCRv6 small），`screen_ocr` 默认使用 RapidOCR，失败自动回退 Windows OCR
 - 移除 OpenCV/ONNX Runtime 依赖，OCR 运行时体积显著降低

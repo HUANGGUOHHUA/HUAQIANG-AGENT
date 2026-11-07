@@ -166,6 +166,61 @@ switch ($Action.ToLowerInvariant()) {
 Write-Output 'ok'
 `
 
+const CLIPBOARD_PASTE_SCRIPT = String.raw`param(
+  [string]$EncodedPaths,
+  [int]$WaitMs = 900
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedPaths))
+$paths = @($json | ConvertFrom-Json)
+$resolved = @()
+foreach ($path in $paths) {
+  if (Test-Path -LiteralPath $path) {
+    $resolved += (Resolve-Path -LiteralPath $path).Path
+  }
+}
+if ($resolved.Count -eq 0) { throw '没有找到要发送的文件' }
+
+$oldFiles = $null
+$oldText = ''
+$oldImage = $null
+$oldHtml = ''
+$oldRtf = ''
+try { $oldFiles = [System.Windows.Forms.Clipboard]::GetFileDropList() } catch { }
+try { $oldText = [System.Windows.Forms.Clipboard]::GetText() } catch { }
+try { $oldImage = [System.Windows.Forms.Clipboard]::GetImage() } catch { }
+try { $oldHtml = [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Html) } catch { }
+try { $oldRtf = [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Rtf) } catch { }
+
+try {
+  $data = New-Object System.Windows.Forms.DataObject
+  $files = New-Object System.Collections.Specialized.StringCollection
+  foreach ($path in $resolved) { [void]$files.Add($path) }
+  $data.SetFileDropList($files)
+  [System.Windows.Forms.Clipboard]::SetDataObject($data, $true)
+  Start-Sleep -Milliseconds 180
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  Start-Sleep -Milliseconds ([Math]::Max(300, [Math]::Min(3000, $WaitMs)))
+} finally {
+  $restore = New-Object System.Windows.Forms.DataObject
+  if ($oldFiles -and $oldFiles.Count -gt 0) {
+    $restore.SetFileDropList($oldFiles)
+  } elseif ($oldImage) {
+    $restore.SetImage($oldImage)
+  } elseif ($oldText) {
+    $restore.SetText($oldText)
+  } elseif ($oldHtml) {
+    $restore.SetText($oldHtml, [System.Windows.Forms.TextDataFormat]::Html)
+  } elseif ($oldRtf) {
+    $restore.SetText($oldRtf, [System.Windows.Forms.TextDataFormat]::Rtf)
+  }
+  [System.Windows.Forms.Clipboard]::SetDataObject($restore, $true)
+}
+Write-Output 'ok'
+`
+
 const KEYBOARD_SCRIPT = String.raw`param(
   [string]$Action,
   [string]$EncodedText = '',
@@ -584,6 +639,7 @@ export type VisualAction =
   | { action: 'click'; x: number; y: number; clicks?: number; button?: 'left' | 'right' | 'middle' }
   | { action: 'double_click'; x: number; y: number }
   | { action: 'type'; text: string }
+  | { action: 'paste_file'; paths: string[] }
   | { action: 'press'; keys: string }
   | { action: 'scroll'; amount: number; x?: number; y?: number }
   | { action: 'wait'; ms: number }
@@ -612,6 +668,16 @@ export function parseVisualAction(raw: string): VisualAction {
     const text = typeof value.text === 'string' ? value.text.slice(0, 4000) : ''
     if (!text) throw new ToolError('type 缺少 text')
     return { action, text }
+  }
+  if (action === 'paste_file') {
+    const rawPaths = Array.isArray(value.paths) ? value.paths : [value.path]
+    const paths = rawPaths
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    if (!paths.length) throw new ToolError('paste_file 缺少有效的 path/paths')
+    return { action, paths }
   }
   if (action === 'press') {
     const keys = typeof value.keys === 'string' ? value.keys.slice(0, 200).trim() : ''
@@ -978,6 +1044,7 @@ export function createDesktopTools(
               '{"action":"click","x":123,"y":456}',
               '{"action":"double_click","x":123,"y":456}',
               '{"action":"type","text":"要输入的文字"}',
+              '{"action":"paste_file","path":"D:\\\\path\\\\file.zip"}',
               '{"action":"press","keys":"ENTER"}',
               '{"action":"scroll","amount":-3}',
               '{"action":"wait","ms":500}',
@@ -998,6 +1065,18 @@ export function createDesktopTools(
           if (action.action === 'wait') {
             await waitFor(action.ms, context.signal)
             return { output: `视觉操作等待 ${action.ms}ms` }
+          }
+          if (action.action === 'paste_file') {
+            const encoded = Buffer.from(JSON.stringify(action.paths), 'utf8').toString('base64')
+            await runPowerShell(
+              'desktop-clipboard',
+              CLIPBOARD_PASTE_SCRIPT,
+              ['-EncodedPaths', encoded, '-WaitMs', '900'],
+              20_000
+            )
+            await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+            uiCache = null
+            return { output: `视觉操作粘贴文件：${action.paths.join('、')}` }
           }
           if (action.action === 'type') {
             const encoded = Buffer.from(action.text, 'utf8').toString('base64')
