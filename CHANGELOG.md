@@ -2,6 +2,7 @@
 
 ## 1.0.4
 
+- 审批弹出时自动释放接管覆盖层和鼠标锁，审批完成后自动恢复，避免审批被覆盖层挡住
 - 集成轻量 RapidOCRLite 原生引擎（PP-OCRv6 small），`screen_ocr` 默认使用 RapidOCR，失败自动回退 Windows OCR
 - 移除 OpenCV/ONNX Runtime 依赖，OCR 运行时体积显著降低
 - OCR 提升：2x 高质量放大、优先中文 OCR 引擎、坐标按缩放还原，改善小字号和中文识别

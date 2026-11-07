@@ -56,6 +56,8 @@ import { createDesktopTools } from './agent/tools/desktop'
 import {
   hideControlOverlay,
   highlightControl,
+  releaseControlOverlay,
+  restoreControlOverlay,
   resumeControlOverlay,
   showControlOverlay,
   suspendControlOverlay
@@ -1026,7 +1028,21 @@ function registerIpc(): void {
             showControlOverlay()
           }
         },
-        requestApproval: (request) => approvalService.request(request, sessionId, sender)
+        requestApproval: async (request) => {
+          // The takeover overlay is always-on-top and the low-level hook blocks
+          // the physical mouse. Release both before showing an approval dialog.
+          releaseControlOverlay()
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show()
+            mainWindow.focus()
+            mainWindow.moveTop()
+          }
+          try {
+            return await approvalService.request(request, sessionId, sender)
+          } finally {
+            restoreControlOverlay()
+          }
+        }
       })
 
       if (beforeSnapshot) {

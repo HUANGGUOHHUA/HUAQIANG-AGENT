@@ -4,6 +4,7 @@ import { startInputLock, stopInputLock } from './input-lock'
 let overlay: BrowserWindow | null = null
 let active = false
 let suspended = false
+let released = false
 
 function virtualBounds(): { x: number; y: number; width: number; height: number } {
   const displays = screen.getAllDisplays()
@@ -157,6 +158,7 @@ function ensureOverlay(): BrowserWindow {
 export function showControlOverlay(): void {
   active = true
   suspended = false
+  released = false
   startInputLock(process.pid)
   const win = ensureOverlay()
   win.setBounds(virtualBounds())
@@ -167,6 +169,7 @@ export function showControlOverlay(): void {
 export function hideControlOverlay(): void {
   active = false
   suspended = false
+  released = false
   stopInputLock()
   if (overlay && !overlay.isDestroyed()) {
     overlay.hide()
@@ -174,18 +177,41 @@ export function hideControlOverlay(): void {
 }
 
 export function suspendControlOverlay(): void {
-  if (!active) return
+  if (!active || released) return
   suspended = true
   if (overlay && !overlay.isDestroyed()) overlay.hide()
 }
 
 export function resumeControlOverlay(): void {
-  if (!active || !suspended) return
+  if (!active || !suspended || released) return
   suspended = false
   if (overlay && !overlay.isDestroyed()) {
     overlay.setBounds(virtualBounds())
     overlay.showInactive()
   }
+}
+
+/**
+ * Release the desktop takeover so the approval UI can be clicked.
+ * Unlike suspend(), this also removes the low-level mouse lock.
+ */
+export function releaseControlOverlay(): void {
+  if (!active) return
+  released = true
+  suspended = false
+  stopInputLock()
+  if (overlay && !overlay.isDestroyed()) overlay.hide()
+}
+
+/** Restore the takeover after the approval dialog has been answered. */
+export function restoreControlOverlay(): void {
+  if (!active || !released) return
+  released = false
+  if (overlay && !overlay.isDestroyed()) {
+    overlay.setBounds(virtualBounds())
+    overlay.showInactive()
+  }
+  startInputLock(process.pid)
 }
 
 export function isControlOverlayActive(): boolean {
@@ -202,7 +228,7 @@ export interface HighlightTarget {
 
 /** Draw a short-lived box around the exact control/point being operated. */
 export function highlightControl(target: HighlightTarget): void {
-  if (!active || suspended) return
+  if (!active || suspended || released) return
   if (!overlay || overlay.isDestroyed() || overlay.webContents.isLoading()) return
   const physical = { x: Math.round(target.x), y: Math.round(target.y) }
   let dip = physical
