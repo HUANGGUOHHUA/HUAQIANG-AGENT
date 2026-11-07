@@ -29,7 +29,7 @@ import type {
 import type { SettingsTab } from './components/SettingsModal'
 import type { LiveMessage, ToastMessage } from './types'
 import { cn, deriveTitle, isImagePath, isTextPreviewPath, stripIpcError, uid } from './lib/utils'
-import { mergeStats, mergeUsage } from './lib/usage'
+import { createAgentEventHandler } from './lib/agent-events'
 import { compactMessages, parseSlashCommand, sessionMarkdown } from './lib/slash-commands'
 import { createZipBytes } from './lib/zip'
 import {
@@ -300,209 +300,31 @@ export default function App(): React.JSX.Element {
     return unsubscribe
   }, [])
 
+  const agentEventRef = useRef<(event: AgentEvent) => void>(() => undefined)
+  agentEventRef.current = createAgentEventHandler({
+    runIdRef,
+    lastRunIdRef,
+    getLive: () => liveRef.current,
+    setLiveNow: publishLive,
+    updateLive: (next) => {
+      liveRef.current = next
+    },
+    flushLive: scheduleLiveFlush,
+    getSession: () => sessionRef.current,
+    commitSession,
+    persistSession: (next) => void persistSession(next),
+    showToast,
+    setApproval,
+    setUsage,
+    setRunning,
+    setRunError,
+    setMcpStatuses
+  })
+
   useEffect(() => {
-    const unsubscribe = window.hq.onAgentEvent((event: AgentEvent) => {
-      if (event.type === 'mcp-status') {
-        setMcpStatuses(event.statuses)
-        return
-      }
-      const isCurrentRun = runIdRef.current === event.runId
-      const isLateFinal =
-        runIdRef.current === null &&
-        lastRunIdRef.current === event.runId &&
-        (event.type === 'assistant-end' || event.type === 'run-end')
-      if (!isCurrentRun && !isLateFinal) return
-      switch (event.type) {
-        case 'notice': {
-          showToast('info', event.message)
-          break
-        }
-        case 'assistant-start': {
-          publishLive({
-            id: event.messageId,
-            role: 'assistant',
-            content: '',
-            reasoning: '',
-            toolCalls: [],
-            createdAt: Date.now()
-          })
-          break
-        }
-        case 'text-delta': {
-          const current = liveRef.current
-          if (current && current.id === event.messageId) {
-            liveRef.current = { ...current, content: current.content + event.delta }
-            scheduleLiveFlush()
-          }
-          break
-        }
-        case 'reasoning-delta': {
-          const current = liveRef.current
-          if (current && current.id === event.messageId) {
-            liveRef.current = { ...current, reasoning: current.reasoning + event.delta }
-            scheduleLiveFlush()
-          }
-          break
-        }
-        case 'tool-draft': {
-          const current = liveRef.current
-          if (current && current.id === event.messageId) {
-            liveRef.current = {
-              ...current,
-              toolDraft: { name: event.name, chars: event.chars }
-            }
-            scheduleLiveFlush()
-          }
-          break
-        }
-        case 'tool-start': {
-          const current = liveRef.current
-          if (!current || current.id !== event.messageId) break
-          if (current.toolCalls.some((call) => call.id === event.callId)) break
-          publishLive({
-            ...current,
-            toolDraft: undefined,
-            toolCalls: [
-              ...current.toolCalls,
-              {
-                id: event.callId,
-                name: event.name,
-                displayName: event.displayName,
-                risk: event.risk,
-                args: event.args,
-                status: 'running',
-                startedAt: Date.now()
-              }
-            ]
-          })
-          break
-        }
-        case 'tool-output': {
-          const current = liveRef.current
-          if (!current || current.id !== event.messageId) break
-          publishLive({
-            ...current,
-            toolCalls: current.toolCalls.map((call) =>
-              call.id === event.callId
-                ? { ...call, result: `${call.result ?? ''}${event.delta}` }
-                : call
-            )
-          })
-          break
-        }
-        case 'tool-end': {
-          const current = liveRef.current
-          if (!current || current.id !== event.messageId) break
-          publishLive({
-            ...current,
-            toolCalls: current.toolCalls.map((call) =>
-              call.id === event.callId
-                ? {
-                    ...call,
-                    status: event.status,
-                    result: event.result,
-                    isError: event.isError,
-                    stats: event.stats,
-                    endedAt: Date.now()
-                  }
-                : call
-            )
-          })
-          break
-        }
-        case 'assistant-end': {
-          const current = sessionRef.current
-          const alreadySaved = current.messages.some((message) => message.id === event.message.id)
-          const next: ChatSession = {
-            ...current,
-            title:
-              current.title === '新对话' && current.messages.some((message) => message.role === 'user')
-                ? deriveTitle(current.messages.find((message) => message.role === 'user')?.content ?? '')
-                : current.title,
-            messages: alreadySaved
-              ? current.messages.map((message) =>
-                  message.id === event.message.id ? event.message : message
-                )
-              : [...current.messages, event.message],
-            updatedAt: Date.now()
-          }
-          commitSession(next)
-          publishLive(null)
-          // Persist as soon as the assistant message is complete, not only when
-          // the whole run finishes, so a crash/close cannot drop the reply.
-          void persistSession(next)
-          break
-        }
-        case 'approval-request':
-          setApproval(event.request)
-          break
-        case 'approval-closed':
-          setApproval((current) => (current?.id === event.requestId ? null : current))
-          break
-        case 'usage':
-          setUsage(event.usage)
-          break
-        case 'context-compressed':
-          showToast('info', `上下文过长，已压缩 ${event.dropped} 条较早消息`)
-          break
-        case 'run-end': {
-          const pending = liveRef.current
-          const currentSession = sessionRef.current
-          const sessionWithUsage: ChatSession = {
-            ...currentSession,
-            tokenUsage: mergeUsage(currentSession.tokenUsage, event.usage),
-            stats: mergeStats(currentSession.stats, event.stats)
-          }
-          const hasPendingMessage =
-            pending &&
-            !currentSession.messages.some((message) => message.id === pending.id) &&
-            (pending.content.trim() ||
-              (pending.reasoning ?? '').trim() ||
-              pending.toolCalls.length > 0)
-          if (pending && hasPendingMessage) {
-            const next: ChatSession = {
-              ...sessionWithUsage,
-              title:
-                currentSession.title === '新对话' &&
-                currentSession.messages.some((message) => message.role === 'user')
-                  ? deriveTitle(
-                      currentSession.messages.find((message) => message.role === 'user')?.content ??
-                        ''
-                    )
-                  : currentSession.title,
-              messages: [...currentSession.messages, pending],
-              updatedAt: Date.now()
-            }
-            commitSession(next)
-            void persistSession(next)
-          } else if (event.usage || event.stats) {
-            commitSession(sessionWithUsage)
-            void persistSession(sessionWithUsage)
-          }
-          setRunning(false)
-          publishLive(null)
-          setApproval(null)
-          const currentRun = runIdRef.current
-          runIdRef.current = null
-          if (event.status === 'aborted') {
-            showToast('info', '任务已停止')
-            setRunError(null)
-          } else if (event.status === 'error') {
-            const last = sessionRef.current.messages[sessionRef.current.messages.length - 1]
-            if (!last?.error) setRunError(event.error ?? '运行未完成')
-          } else {
-            setRunError(null)
-          }
-          if (event.usage) setUsage(event.usage)
-          if (currentRun) void persistSession(sessionRef.current)
-          break
-        }
-        case 'run-start':
-          break
-      }
-    })
+    const unsubscribe = window.hq.onAgentEvent((event: AgentEvent) => agentEventRef.current(event))
     return unsubscribe
-  }, [commitSession, persistSession, showToast])
+  }, [])
 
   const activeProfile: ApiProfile | undefined =
     settings?.profiles.find((profile) => profile.id === settings.activeProfileId) ??

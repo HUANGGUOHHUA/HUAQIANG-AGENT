@@ -8,25 +8,19 @@ import {
   ExternalLink,
   FolderOpen,
   Info,
-  KeyRound,
   LoaderCircle,
   LockKeyhole,
   Plus,
   Plug,
-  RefreshCw,
   Save,
   ShieldAlert,
   ShieldCheck,
-  Trash2,
-  X,
-  Zap
+  X
 } from 'lucide-react'
 import type {
-  ApiProfile,
   ApprovalMode,
   McpServerConfig,
   McpStatus,
-  McpTestResult,
   ModelInfo,
   ProfileDraft,
   SettingsSaveInput,
@@ -36,14 +30,11 @@ import type {
 import logo from '../assets/logo.png'
 import emblem from '../assets/emblem.png'
 import { cn, stripIpcError, uid } from '../lib/utils'
+import { blankProfile, draftFromProfile, type DraftProfile } from '../lib/settings-form'
+import McpEditor from './settings/McpEditor'
+import ModelTab from './settings/ModelTab'
 
 export type SettingsTab = 'model' | 'mcp' | 'workspace' | 'about'
-
-interface DraftProfile extends ProfileDraft {
-  apiKey: string
-  clearKey: boolean
-  hasKey: boolean
-}
 
 const TABS: Array<{ id: SettingsTab; label: string; icon: React.JSX.Element; hint: string }> = [
   { id: 'model', label: '模型接入', icon: <Cpu size={16} />, hint: 'API 与模型参数' },
@@ -52,221 +43,6 @@ const TABS: Array<{ id: SettingsTab; label: string; icon: React.JSX.Element; hin
   { id: 'about', label: '关于', icon: <Info size={16} />, hint: '版本与校园文化' }
 ]
 
-function draftFromProfile(profile: ApiProfile): DraftProfile {
-  return {
-    id: profile.id,
-    name: profile.name,
-    provider: profile.provider,
-    baseUrl: profile.baseUrl,
-    model: profile.model,
-    contextWindow: profile.contextWindow,
-    temperature: profile.temperature,
-    maxTokens: profile.maxTokens,
-    vision: profile.vision,
-    apiKey: '',
-    clearKey: false,
-    hasKey: profile.hasKey
-  }
-}
-
-function formatTokens(value?: number): string {
-  if (!value || value <= 0) return '未知'
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
-  if (value >= 1000) return `${Math.round(value / 1000)}K`
-  return String(value)
-}
-
-function blankProfile(): DraftProfile {
-  return {
-    id: uid(),
-    name: '通用接口',
-    provider: 'openai',
-    baseUrl: '',
-    model: '',
-    contextWindow: 128000,
-    temperature: 0.3,
-    maxTokens: 8192,
-    apiKey: '',
-    clearKey: false,
-    hasKey: false
-  }
-}
-
-function parsePairs(text: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (const line of text.split(/\r?\n/)) {
-    const index = line.indexOf('=')
-    if (index <= 0) continue
-    const key = line.slice(0, index).trim()
-    if (!key) continue
-    result[key] = line.slice(index + 1).trim()
-  }
-  return result
-}
-
-function pairsText(pairs: Record<string, string>): string {
-  return Object.entries(pairs)
-    .map(([key, value]) => `${key}=${value}`)
-    .join('\n')
-}
-
-function McpEditor({
-  config,
-  status,
-  onChange,
-  onRemove
-}: {
-  config: McpServerConfig
-  status?: McpStatus
-  onChange: (next: McpServerConfig) => void
-  onRemove: () => void
-}): React.JSX.Element {
-  const [argsText, setArgsText] = useState(config.args.join('\n'))
-  const [envText, setEnvText] = useState(pairsText(config.env))
-  const [headersText, setHeadersText] = useState(pairsText(config.headers))
-  const [expanded, setExpanded] = useState(true)
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<McpTestResult | null>(null)
-
-  const runTest = async (): Promise<void> => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      setTestResult(await window.hq.mcpTest(config))
-    } catch (error) {
-      setTestResult({ ok: false, message: stripIpcError(String(error)) })
-    } finally {
-      setTesting(false)
-    }
-  }
-
-  return (
-    <div className={cn('mcp-editor', !config.enabled && 'disabled')}>
-      <div className="mcp-editor-head">
-        <button
-          type="button"
-          className={cn('mini-switch', config.enabled && 'on')}
-          onClick={() => onChange({ ...config, enabled: !config.enabled })}
-          role="switch"
-          aria-checked={config.enabled}
-          title={config.enabled ? '已启用' : '已停用'}
-        >
-          <span />
-        </button>
-        <input
-          className="mcp-name-input"
-          value={config.name}
-          onChange={(event) => onChange({ ...config, name: event.target.value })}
-          placeholder="MCP 服务名称"
-        />
-        <span className={cn('mcp-editor-state', status?.state ?? 'disconnected')}>
-          {status?.state === 'connected' ? `${status.tools.length} 个工具` : status?.state === 'error' ? '连接失败' : config.enabled ? '待连接' : '已停用'}
-        </span>
-        <button type="button" className="icon-btn tiny" onClick={() => setExpanded((v) => !v)}>
-          <ChevronRight size={14} className={cn('rotate-icon', expanded && 'open')} />
-        </button>
-        <button type="button" className="icon-btn tiny danger" onClick={onRemove} title="删除">
-          <Trash2 size={14} />
-        </button>
-      </div>
-
-      {expanded && (
-        <div className="mcp-editor-body">
-          <div className="form-row two">
-            <label className="field">
-              <span>传输方式</span>
-              <select
-                value={config.transport}
-                onChange={(event) =>
-                  onChange({ ...config, transport: event.target.value as 'stdio' | 'http' })
-                }
-              >
-                <option value="stdio">stdio · 本地进程</option>
-                <option value="http">HTTP · Streamable HTTP</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>启动命令或 URL</span>
-              {config.transport === 'stdio' ? (
-                <input
-                  value={config.command}
-                  onChange={(event) => onChange({ ...config, command: event.target.value })}
-                  placeholder="例如 npx"
-                />
-              ) : (
-                <input
-                  value={config.url}
-                  onChange={(event) => onChange({ ...config, url: event.target.value })}
-                  placeholder="https://example.com/mcp"
-                />
-              )}
-            </label>
-          </div>
-
-          {config.transport === 'stdio' ? (
-            <div className="form-row two align-start">
-              <label className="field">
-                <span>启动参数 · 每行一个</span>
-                <textarea
-                  rows={4}
-                  value={argsText}
-                  onChange={(event) => {
-                    setArgsText(event.target.value)
-                    onChange({
-                      ...config,
-                      args: event.target.value
-                        .split(/\r?\n/)
-                        .map((line) => line.trim())
-                        .filter(Boolean)
-                    })
-                  }}
-                  placeholder={'-y\n@modelcontextprotocol/server-filesystem\nD:\\我的项目'}
-                />
-              </label>
-              <label className="field">
-                <span>环境变量 · KEY=VALUE</span>
-                <textarea
-                  rows={4}
-                  value={envText}
-                  onChange={(event) => {
-                    setEnvText(event.target.value)
-                    onChange({ ...config, env: parsePairs(event.target.value) })
-                  }}
-                  placeholder={'API_KEY=...\n# 每行一个 KEY=VALUE'}
-                />
-              </label>
-            </div>
-          ) : (
-            <label className="field">
-              <span>请求头 · KEY=VALUE</span>
-              <textarea
-                rows={3}
-                value={headersText}
-                onChange={(event) => {
-                  setHeadersText(event.target.value)
-                  onChange({ ...config, headers: parsePairs(event.target.value) })
-                }}
-                placeholder="Authorization=Bearer ..."
-              />
-            </label>
-          )}
-
-          <div className="mcp-editor-foot">
-            <button type="button" className="btn ghost small" onClick={() => void runTest()} disabled={testing}>
-              {testing ? <LoaderCircle size={13} className="spin" /> : <Zap size={13} />}
-              测试连接
-            </button>
-            {testResult && (
-              <span className={cn('inline-test', testResult.ok ? 'ok' : 'error')}>
-                {testResult.message}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
 
 interface SettingsModalProps {
   settings: UiSettings
@@ -480,7 +256,8 @@ export default function SettingsModal({
     if (!selected.baseUrl.trim() || !selected.model.trim()) {
       setTestResult({ ok: false, message: '请先填写 Base URL 与 Model ID' })
       return
-    }    setTesting(true)
+    }
+    setTesting(true)
     setTestResult(null)
     const profileId = selected.id
     try {
@@ -642,265 +419,27 @@ export default function SettingsModal({
 
           <div className="settings-content">
             {tab === 'model' && (
-              <div className="settings-section model-section">
-                <div className="profile-switcher">
-                  <div className="profile-switcher-list">
-                    {profiles.map((profile) => (
-                      <button
-                        type="button"
-                        key={profile.id}
-                        className={cn('profile-tab', profile.id === selected.id && 'active')}
-                        onClick={() => switchProfile(profile.id)}
-                        title={profile.baseUrl || '尚未填写 Base URL'}
-                      >
-                        {profile.name.trim() || '未命名配置'}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="profile-switcher-actions">
-                    <button type="button" className="icon-btn tiny" onClick={addProfile} title="新增配置">
-                      <Plus size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-btn tiny danger"
-                      onClick={removeProfile}
-                      disabled={profiles.length <= 1}
-                      title="删除当前配置"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-                <div className="profile-form generic-profile-form">
-                  <div className="profile-form-head">
-                    <div>
-                      <h3>模型配置</h3>
-                      <span>可以保存多套接口配置；当前标签页的配置会作为默认模型。</span>
-                    </div>
-                  </div>
-
-                  <div className="form-row two">
-                    <label className="field">
-                      <span>配置名称</span>
-                      <input
-                        value={selected.name}
-                        onChange={(event) => updateProfile({ name: event.target.value })}
-                        placeholder="通用接口"
-                      />
-                    </label>
-                    <label className="field">
-                      <span>接口协议</span>
-                      <select
-                        value={selected.provider}
-                        onChange={(event) => {
-                          updateProfile({
-                            provider: event.target.value as 'openai' | 'anthropic'
-                          })
-                          setModels([])
-                          setModelsError('')
-                        }}
-                      >
-                        <option value="openai">OpenAI 兼容 · /chat/completions</option>
-                        <option value="anthropic">Anthropic · /v1/messages</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <label className="field">
-                    <span>Base URL</span>
-                    <input
-                      value={selected.baseUrl}
-                      onChange={(event) => {
-                        updateProfile({ baseUrl: event.target.value })
-                        setModels([])
-                        setModelsError('')
-                      }}
-                      onBlur={() => {
-                        if (
-                          selected.apiKey.trim() ||
-                          selected.hasKey ||
-                          /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(selected.baseUrl)
-                        ) {
-                          void discoverModels(true)
-                        }
-                      }}
-                      placeholder="https://api.example.com/v1"
-                      spellCheck={false}
-                    />
-                    <small>填写到 /v1 即可；程序会自动读取 /models 并使用你的 API Key。</small>
-                  </label>
-
-                  <label className="field key-field">
-                    <span>API Key</span>
-                    <div className="key-input-wrap">
-                      <KeyRound size={14} />
-                      <input
-                        type="password"
-                        value={selected.apiKey}
-                        onChange={(event) =>
-                          updateProfile({ apiKey: event.target.value, clearKey: false })
-                        }
-                        onBlur={() => {
-                          if (selected.baseUrl.trim() && selected.apiKey.trim()) {
-                            void discoverModels(true)
-                          }
-                        }}
-                        placeholder={profileKeyHint}
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                    </div>
-                    {selected.hasKey && !selected.clearKey && (
-                      <button
-                        type="button"
-                        className="clear-key"
-                        onClick={() => updateProfile({ clearKey: true, hasKey: false })}
-                      >
-                        清除已保存密钥
-                      </button>
-                    )}
-                    {selected.hasKey && !selected.apiKey && !selected.clearKey && (
-                      <small>已安全保存，留空保持不变</small>
-                    )}
-                    {selected.clearKey && <small className="warn-text">保存后将清除密钥</small>}
-                  </label>
-
-                  <div className="field model-field">
-                    <div className="field-label-row">
-                      <span>Model ID</span>
-                      <button
-                        type="button"
-                        className="text-link model-fetch"
-                        onClick={() => void discoverModels()}
-                        disabled={modelsLoading}
-                      >
-                        {modelsLoading ? (
-                          <LoaderCircle size={12} className="spin" />
-                        ) : (
-                          <RefreshCw size={12} />
-                        )}
-                        {modelsLoading ? '读取中…' : '读取模型'}
-                      </button>
-                    </div>
-                    <input
-                      value={selected.model}
-                      onChange={(event) => updateProfile({ model: event.target.value })}
-                      placeholder="读取后从列表选择，或手动填写 Model ID"
-                      spellCheck={false}
-                    />
-                    {modelsLoading && (
-                      <div className="model-loading">
-                        <span />
-                        <span />
-                        <span />
-                        正在读取模型信息…
-                      </div>
-                    )}
-                    {!modelsLoading && models.length > 0 && (
-                      <div className="model-results">
-                        <div className="model-results-head">
-                          可用模型 · {models.length}
-                          <small>上下文与最大输出会随模型自动填入</small>
-                        </div>
-                        {models.map((model) => (
-                          <button
-                            type="button"
-                            key={model.id}
-                            className={cn(
-                              'model-row',
-                              selected.model === model.id && 'selected'
-                            )}
-                            onClick={() => applyModel(model)}
-                          >
-                            <span className="model-row-main">
-                              <strong>{model.name || model.id}</strong>
-                              {model.name && <small>{model.id}</small>}
-                            </span>
-                            <span className="model-row-meta">
-                              {model.vision && <span className="vision-badge">视觉</span>}
-                              <span>上下文 {formatTokens(model.contextWindow)}</span>
-                              <span>最大输出 {formatTokens(model.maxOutputTokens)}</span>
-                            </span>
-                            {selected.model === model.id && <Check size={13} />}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <small className={modelsError ? 'warn-text' : undefined}>
-                      {modelsError ||
-                        (models.length
-                          ? '点选模型会自动填入上下文窗口和最大输出；也可以手动修改。'
-                          : '填写 Base URL 后点「读取模型」；接口不返回元数据时可手动填写。')}
-                    </small>
-                  </div>
-
-                  <div className="form-row two">
-                    <label className="field">
-                      <span>上下文窗口 Tokens</span>
-                      <input
-                        type="number"
-                        min={4000}
-                        max={2000000}
-                        step={1000}
-                        value={selected.contextWindow}
-                        onChange={(event) =>
-                          updateProfile({ contextWindow: Number(event.target.value) || 128000 })
-                        }
-                      />
-                      <small>用于判断何时压缩较早的对话；从模型列表自动填入。</small>
-                    </label>
-                    <label className="field">
-                      <span>单次最大输出 Tokens</span>
-                      <input
-                        type="number"
-                        min={256}
-                        max={200000}
-                        step={256}
-                        value={selected.maxTokens}
-                        onChange={(event) =>
-                          updateProfile({ maxTokens: Number(event.target.value) || 8192 })
-                        }
-                      />
-                      <small>模型列表提供上限时会自动填入，可手动调低。</small>
-                    </label>
-                  </div>
-
-                  <label className="field">
-                    <span>Temperature · {selected.temperature.toFixed(1)}</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="2"
-                      step="0.1"
-                      value={selected.temperature}
-                      onChange={(event) =>
-                        updateProfile({ temperature: Number(event.target.value) })
-                      }
-                    />
-                    <small>越低越稳定，编程任务建议 0.2 – 0.5。</small>
-                  </label>
-
-                  <div className="test-row">
-                    <button
-                      type="button"
-                      className="btn secondary"
-                      onClick={() => void testConnection()}
-                      disabled={testing}
-                    >
-                      {testing ? <LoaderCircle size={14} className="spin" /> : <Zap size={14} />}
-                      测试连接
-                    </button>
-                    <span className="test-hint">会发送一次极小的真实请求</span>
-                  </div>
-                  {testResult && (
-                    <div className={cn('test-result', testResult.ok ? 'ok' : 'error')}>
-                      {testResult.ok ? <Check size={14} /> : <AlertTriangle size={14} />}
-                      {testResult.message}
-                    </div>
-                  )}
-                </div>
-              </div>
+            <ModelTab
+              profiles={profiles}
+              selected={selected}
+              models={models}
+              modelsLoading={modelsLoading}
+              modelsError={modelsError}
+              testing={testing}
+              testResult={testResult}
+              keyHint={profileKeyHint}
+              onSwitchProfile={switchProfile}
+              onAddProfile={addProfile}
+              onRemoveProfile={removeProfile}
+              onUpdateProfile={updateProfile}
+              onResetModels={() => {
+                setModels([])
+                setModelsError('')
+              }}
+              onDiscoverModels={(silent) => void discoverModels(silent)}
+              onApplyModel={applyModel}
+              onTestConnection={() => void testConnection()}
+            />
             )}
 
             {tab === 'mcp' && (

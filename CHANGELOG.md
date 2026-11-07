@@ -22,6 +22,10 @@
 - 高亮属于受保护的接管覆盖层，不会进入截图；1.1 秒后自动消失
 - 代码整理：主进程按生命周期/窗口/提权/IPC 拆分，`index.ts` 从 1542 行降到 125 行
 - 代码整理：桌面工具拆为 `scripts / powershell / snapshot / visual / session / tools`，鼠标、键盘、剪贴板的“高亮 → 执行 → 等待 → 失效快照”重复代码收敛到 `DesktopSession`
+- 代码整理：浏览器面板拆出页面脚本和命令执行器，`BrowserPane` 从 1194 行降到 641 行
+- 代码整理：设置面板拆出 `ModelTab`、`McpEditor` 和表单工具，`SettingsModal` 从 1301 行降到 840 行
+- 代码整理：Agent 事件处理从 `App` 抽成纯函数 `createAgentEventHandler`，可直接单测
+- 新增浏览器命令、设置表单、Agent 事件处理的单元测试（+20 条）
 - 修复浏览器 `autofill` 误用页面内未定义的 `submit` 变量，勾选提交时不再抛 `submit is not defined`
 - 清理未使用的导入、类型和变量
 - 版本号更新至 1.0.4
