@@ -35,8 +35,24 @@ except Exception as exc:
     print(json.dumps({"ready": False, "error": str(exc)}, ensure_ascii=False), flush=True)
     raise SystemExit(1)
 
+from pathlib import Path
+model_dir = Path(sys.executable).resolve().parent / "ocr-models"
+model_params = {
+    "Det.model_path": str(model_dir / "PP-OCRv6_det_small.onnx"),
+    "Rec.model_path": str(model_dir / "PP-OCRv6_rec_small.onnx"),
+    "Rec.rec_keys_path": str(model_dir / "ppocrv6_dict.txt"),
+    "Global.use_cls": False,
+}
+if not all((model_dir / name).exists() for name in (
+    "PP-OCRv6_det_small.onnx",
+    "PP-OCRv6_rec_small.onnx",
+    "ppocrv6_dict.txt",
+)):
+    # Built-in Lite fallback. It uses the bundled Indra weights.
+    model_params = {"Det.model_type": "lite", "Rec.model_type": "lite"}
+
 with contextlib.redirect_stdout(sys.stderr):
-    engine = RapidOCR()
+    engine = RapidOCR(params=model_params)
 
 print(json.dumps({"ready": True}, ensure_ascii=False), flush=True)
 

@@ -35,7 +35,7 @@ describe('DSH-aligned system prompt', () => {
     expect(prompt).toContain('`browser_document_title`')
     expect(prompt).toContain('`screen_click(text=...)`')
     expect(prompt).toContain('RapidOCR')
-    expect(prompt).toContain('engine="rapidocr"')
+    expect(prompt).toContain('screen_ocr(region_x=')
   })
 
   it('names the real tool surface and Windows-specific rules', () => {

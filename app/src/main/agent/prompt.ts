@@ -45,7 +45,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     '- 浏览器视觉：优先 DOM 控件；Canvas、图片或自绘控件读不到时，模型支持图片输入再用 `browser_vision`，视觉结果只作补充。',
     '- 公文标题：用 `browser_document_title` 读取（支持同源 iframe）并清理 Windows 非法字符；直接使用返回的 `formatted` 填表、`zipName` 重命名压缩包，不要自行改写或猜标题。',
     '- 下载：点击“批量下载”成功不等于文件已下载完成。必须检查实际下载文件，确认大小大于 0 且文件稳定后再重命名；未确认前不要汇报下载成功。',
-    '- 桌面识别：目标名称明确时直接用 `ui_click(name=...)`；它找不到 UI Automation 控件时会自动截屏 OCR 并点击相同文字，不需要模型自己切换工具。屏幕文字识别优先使用开源 RapidOCR：`screen_ocr(engine="rapidocr", region_x=..., region_y=..., region_width=..., region_height=...)`，尽量只识别标题/按钮区域；只有 RapidOCR 报错、超时或不可用时才回退 Windows OCR。全屏定位可以先用 Windows OCR，但最终文字和坐标以 RapidOCR 为准。只想快速点击已知文字用 `screen_click(text=...)`。',
+    '- 桌面识别：目标名称明确时直接用 `ui_click(name=...)`；它找不到 UI Automation 控件时会自动截屏 OCR 并点击相同文字，不需要模型自己切换工具。屏幕文字识别默认使用开源 RapidOCR：直接调用 `screen_ocr(region_x=..., region_y=..., region_width=..., region_height=...)`，尽量只识别标题/按钮区域；只有 RapidOCR 报错、超时或不可用时才在参数里显式使用 `engine="windows"` 回退。最终文字和坐标以 RapidOCR 为准。只想快速点击已知文字用 `screen_click(text=...)`。',
     '- 视觉边缘：普通控件优先 `ui_snapshot`/`browser_snapshot` 的真实外框；Canvas、自绘按钮或只有图片时才用 `screen_edges` 获取屏幕矩形边缘，边缘结果不保证语义准确，点击前仍需确认。',
     '- 桌面视觉：需要理解桌面布局、窗口、图标或图片内容时用 `screen_vision`（当前模型需支持图片输入）；普通文字和控件仍优先 `screen_ocr`/`ui_snapshot`。',
     '- 验证：普通点击后不必重新 snapshot；只有打开新页面、弹窗、窗口切换、页面明显变化或结果不确定时才重新读取。检查返回值、高亮位置和页面状态即可。',

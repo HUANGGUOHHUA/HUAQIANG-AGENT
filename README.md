@@ -18,7 +18,7 @@
 - **多模型配置**：OpenAI 兼容接口 / Anthropic Messages，支持读取 `/models`
 - **流式输出**：思考过程、工具步骤、执行结果实时显示；检测到模型重复段落时自动停止
 - **对话与工作区**：一个工作区对应一个项目，对话记录独立保存
-- **附件**：文本、图片、PDF；支持 RapidOCR（PP-OCRv6 small）区域识别和 Windows OCR 全屏回退，返回文字与坐标
+- **附件**：文本、图片、PDF；默认 RapidOCRLite 原生引擎（PP-OCRv6 small），Windows OCR 自动回退，返回文字与坐标
 - **权限审批**：写文件、执行命令、访问网络、调用 MCP 前可确认
 - **内置 MCP**：Python、Excel、Word、PPT、PDF、图片处理
 - **便携 Python**：随项目下载，不依赖用户电脑安装办公库

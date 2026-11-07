@@ -2,7 +2,8 @@
 
 ## 1.0.4
 
-- 集成 RapidOCR（PP-OCRv6 small + ONNX Runtime）：指定 `screen_ocr` 区域时优先使用，失败自动回退 Windows OCR；全屏默认 Windows OCR 以控制延迟
+- 集成轻量 RapidOCRLite 原生引擎（PP-OCRv6 small），`screen_ocr` 默认使用 RapidOCR，失败自动回退 Windows OCR
+- 移除 OpenCV/ONNX Runtime 依赖，OCR 运行时体积显著降低
 - OCR 提升：2x 高质量放大、优先中文 OCR 引擎、坐标按缩放还原，改善小字号和中文识别
 - 增加模型回复重复保护：流式输出检测到连续重复段落时自动停止并截断，不再一直复读
 - OpenAI 兼容接口增加 frequency/presence penalty，降低小模型循环输出概率

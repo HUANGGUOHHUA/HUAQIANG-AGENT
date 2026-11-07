@@ -747,7 +747,7 @@ export function createDesktopTools(
       displayName: '读取屏幕文字',
       risk: 'read',
       description:
-        '截取整个虚拟桌面并识别文字。指定 region_* 或 engine="rapidocr" 时使用更准的 RapidOCR（PP-OCRv6 small），全屏 auto 默认用较快的 Windows OCR；RapidOCR 失败自动回退 Windows。返回每行文字及其虚拟桌面绝对坐标（x/y/width/height）和当前引擎。不需要坐标时传 with_boxes=false。只想点击某段文字时直接用 screen_click(text)。',
+        '截取整个虚拟桌面并识别文字。默认使用开源 RapidOCR（PP-OCRv6 small），全屏和区域都适用；RapidOCR 失败自动回退 Windows OCR。返回每行文字及其虚拟桌面绝对坐标（x/y/width/height）和当前引擎。不需要坐标时传 with_boxes=false。只想快速点击某段文字时直接用 screen_click(text)。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -758,7 +758,7 @@ export function createDesktopTools(
           engine: {
             type: 'string',
             enum: ['auto', 'windows', 'rapidocr'],
-            description: 'auto：全屏用 Windows OCR，指定区域用 RapidOCR；windows：强制 Windows；rapidocr：强制 RapidOCR'
+            description: '默认 rapidocr；windows 仅用于快速模式或 RapidOCR 失败时手动回退'
           },
           region_x: { type: 'number', description: '可选，只识别区域的 X 坐标' },
           region_y: { type: 'number', description: '可选，只识别区域的 Y 坐标' },
@@ -810,10 +810,8 @@ export function createDesktopTools(
                   height: regionHeight
                 }
               : undefined
-          const requestedEngine = stringArg(args, 'engine', { fallback: 'auto' })
-          const useRapid =
-            requestedEngine === 'rapidocr' ||
-            (requestedEngine !== 'windows' && Boolean(region))
+          const requestedEngine = stringArg(args, 'engine', { fallback: 'rapidocr' })
+          const useRapid = requestedEngine !== 'windows'
           const boxes = await ocrBoxes(path, { useRapid, region })
           const offsetX = originX + (boxes.region?.x ?? 0)
           const offsetY = originY + (boxes.region?.y ?? 0)
