@@ -747,7 +747,7 @@ export function createDesktopTools(
       displayName: '读取屏幕文字',
       risk: 'read',
       description:
-        '截取整个虚拟桌面并识别文字。默认使用 RapidOCR（PP-OCRv6 small），失败时回退 Windows OCR；返回每行文字及其虚拟桌面绝对坐标（x/y/width/height）和当前引擎。不需要坐标时传 with_boxes=false。只想点击某段文字时直接用 screen_click(text)。',
+        '截取整个虚拟桌面并识别文字。指定 region_* 或 engine="rapidocr" 时使用更准的 RapidOCR（PP-OCRv6 small），全屏 auto 默认用较快的 Windows OCR；RapidOCR 失败自动回退 Windows。返回每行文字及其虚拟桌面绝对坐标（x/y/width/height）和当前引擎。不需要坐标时传 with_boxes=false。只想点击某段文字时直接用 screen_click(text)。',
       inputSchema: {
         type: 'object',
         properties: {
