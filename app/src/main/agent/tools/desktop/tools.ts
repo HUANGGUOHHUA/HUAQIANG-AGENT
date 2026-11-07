@@ -18,12 +18,23 @@ function describeControls(items: UiSnapshotItem[]): string {
   return names ? `。可用控件：${names}` : ''
 }
 
+/** 找不到控件时给模型的提示：第一次劝它换视觉点击，连续失败就明确禁止继续枚举。 */
+export function controlMissHint(misses: number): string {
+  return misses >= 2
+    ? `；已连续 ${misses} 次没找到控件，禁止继续 ui_snapshot/ui_click，请改用 screen_act 直接点击屏幕上的控件`
+    : '；QQ、微信等自绘界面没有 UIA 控件，请改用 screen_act 按坐标点击'
+}
+
 /** 桌面控制工具：全部通过 DesktopSession 执行，坐标均为虚拟桌面物理像素。 */
 export function createDesktopTools(
   getWindow: () => BrowserWindow | null,
   options: DesktopToolOptions = {}
 ): ToolDefinition[] {
   const session = new DesktopSession(getWindow, options)
+  // 找控件失败次数：连续失败就明确要求模型改成“看见什么点什么”，
+  // 避免在 QQ/微信这类自绘界面上反复枚举 UIA 树。
+  let controlMisses = 0
+  const missHint = (): string => controlMissHint(controlMisses)
 
   return [
     {
@@ -31,7 +42,7 @@ export function createDesktopTools(
       displayName: '识别界面',
       risk: 'read',
       description:
-        '读取当前所有显示器上的前台窗口和可见控件，返回虚拟桌面范围、显示器列表、控件类型、名称、AutomationId、屏幕坐标（物理像素）和大小。不知道目标控件时才用它；目标名称明确可直接 ui_click(name) 或 screen_click(text)。参数 max_items：最多返回多少个条目，默认 80。',
+        '读取 UIA 控件树，只适用于标准 Win32 界面（对话框、资源管理器、系统设置）。QQ、微信、钉钉、游戏等自绘界面没有可读控件，不要用这个工具，直接 screen_act 按坐标点击。目标名称明确时可先 ui_click(name)；连续两次找不到就改 screen_act。参数 max_items：最多返回多少个条目，默认 80。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -42,7 +53,16 @@ export function createDesktopTools(
       summarize: () => '识别当前桌面窗口和控件',
       execute: async (args) => {
         const max = numberArg(args, 'max_items', 80, 20, 150)
-        const { raw } = await session.snapshot(max)
+        const { items, raw } = await session.snapshot(max)
+        const controls = items.filter((item) => item.kind === 'control').length
+        if (controls === 0) {
+          // 只有窗口、没有控件（QQ/微信这类自绘界面）：直接劝模型改用视觉点击。
+          controlMisses += 1
+          return {
+            output: `${raw || '{"items":[]}'}\n提示：当前界面没有可用的 UIA 控件${missHint()}`
+          }
+        }
+        controlMisses = 0
         return { output: raw || '{"items":[]}' }
       }
     },
@@ -171,6 +191,8 @@ export function createDesktopTools(
         if (!options.analyzeImage) throw new ToolError('当前没有可用的视觉分析器')
         const instruction = stringArg(args, 'instruction', { required: true, max: 2000 }).trim()
         if (!instruction) throw new ToolError('instruction 不能为空')
+        // 走到视觉坐标点击，说明已经放弃 UIA 找控件，计数清零。
+        controlMisses = 0
         const shot = await session.capture(true)
         try {
           const bytes = await readFile(shot.path)
@@ -329,11 +351,82 @@ export function createDesktopTools(
       }
     },
     {
+      name: 'screen_click_target',
+      displayName: '点击看到的控件',
+      risk: 'exec',
+      description:
+        '直接点击屏幕上看见的控件：截取当前桌面交给视觉模型，按描述（按钮文字、图标、头像、菜单项）找到位置并点下去，一步完成。QQ、微信、游戏等自绘界面用它，不要先 ui_snapshot 找控件。找不到时只返回说明，不会乱点。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target: {
+            type: 'string',
+            description: '要点击的控件描述，例如“发送按钮”“张三的头像”“右上角关闭”'
+          },
+          button: { type: 'string', enum: ['left', 'right', 'middle'], description: '鼠标按键，默认 left' },
+          clicks: { type: 'number', description: '点击次数，1-3，默认 1' }
+        },
+        required: ['target'],
+        additionalProperties: false
+      },
+      summarize: (args) => `点击「${stringArg(args, 'target').slice(0, 40)}」`,
+      execute: async (args, context) => {
+        if (!options.analyzeImage) {
+          throw new ToolError('当前没有可用的视觉分析器；请改用 screen_click(text=...) 按文字点击')
+        }
+        const target = stringArg(args, 'target', { required: true, max: 300 }).trim()
+        if (!target) throw new ToolError('target 不能为空')
+        controlMisses = 0
+        const shot = await session.capture(true)
+        try {
+          const bytes = await readFile(shot.path)
+          const raw = await options.analyzeImage(buildVisualPrompt(`点击「${target}」`, shot.bounds), {
+            dataUrl: `data:image/png;base64,${bytes.toString('base64')}`,
+            url: 'screen://click-target',
+            title: '按描述点击'
+          })
+          const action = parseVisualAction(raw)
+          if (action.action === 'done') {
+            return {
+              output: `没有在屏幕上看到「${target}」：${action.message || '请确认控件当前是否可见'}`
+            }
+          }
+          if (
+            action.action !== 'click' &&
+            action.action !== 'double_click' &&
+            action.action !== 'right_click'
+          ) {
+            throw new ToolError(
+              `视觉模型返回了 ${action.action}，没有给出点击坐标；请重试一次，或改用 screen_act`
+            )
+          }
+          const x = Math.round(shot.bounds.x + action.x)
+          const y = Math.round(shot.bounds.y + action.y)
+          const clicks =
+            action.action === 'double_click' ? 2 : numberArg(args, 'clicks', 1, 1, 3)
+          const button =
+            action.action === 'right_click'
+              ? 'right'
+              : normalizeButton(stringArg(args, 'button', { fallback: 'left' }))
+          await session.click(x, y, {
+            signal: context.signal,
+            button,
+            clicks,
+            label: `点击「${target}」`
+          })
+          return { output: `已点击「${target}」(${x}, ${y})` }
+        } finally {
+          shot.restore()
+          await unlink(shot.path).catch(() => undefined)
+        }
+      }
+    },
+    {
       name: 'ui_click',
       displayName: '识别并点击',
       risk: 'exec',
       description:
-        '按名称、id 或类型点击控件中心。名称明确时直接 ui_click(name="批量下载")，不必先 ui_snapshot；UI Automation 找不到时会自动截屏 OCR，找到相同文字后点击。id 最稳定，name 支持包含匹配，index 只对最近一次快照有效。',
+        '按名称、id 或类型点击标准 Win32 控件中心。UI Automation 找不到时会自动截屏 OCR 找文字；连续两次都找不到就不要再试，改用 screen_act 直接按坐标点击。QQ、微信等自绘界面直接用 screen_act。id 最稳定，name 支持包含匹配，index 只对最近一次快照有效。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -365,20 +458,22 @@ export function createDesktopTools(
           item = pickUiItem(items, args)
         }
         if (!item) {
+          controlMisses += 1
           const name = stringArg(args, 'name').trim()
           if (name) {
             try {
               const fallback = await session.clickText(name, args, context.signal)
+              controlMisses = 0
               return { output: `UI Automation 未找到，${fallback}` }
             } catch (screenError) {
               const detail =
                 screenError instanceof Error ? screenError.message : String(screenError)
               throw new ToolError(
-                `没有找到匹配的控件${describeControls(items)}；屏幕识别也未找到：${detail}`
+                `没有找到匹配的控件${describeControls(items)}；屏幕识别也未找到：${detail}${missHint()}`
               )
             }
           }
-          throw new ToolError(`没有找到匹配的控件${describeControls(items)}`)
+          throw new ToolError(`没有找到匹配的控件${describeControls(items)}${missHint()}`)
         }
         const x = Math.round(Number(item.x ?? 0) + Number(item.width ?? 0) / 2)
         const y = Math.round(Number(item.y ?? 0) + Number(item.height ?? 0) / 2)
@@ -394,6 +489,7 @@ export function createDesktopTools(
           height: Number(item.height ?? 26),
           label: `${item.type ?? '控件'}${item.name ? ` ${item.name}` : ''}`
         })
+        controlMisses = 0
         return {
           output: `已点击 ${item.type ?? '控件'}「${item.name ?? ''}」中心 (${x}, ${y})`
         }

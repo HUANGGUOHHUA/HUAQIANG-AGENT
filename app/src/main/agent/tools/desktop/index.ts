@@ -11,6 +11,7 @@ export const DESKTOP_TOOL_NAMES = [
   'screen_act',
   'screen_edges',
   'screen_click',
+  'screen_click_target',
   'ui_click',
   'mouse_move',
   'mouse_click',

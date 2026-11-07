@@ -31,7 +31,7 @@ import {
 } from '../control-overlay'
 import { withNetworkLock } from '../network-lock'
 import { activeRuns, state } from '../state'
-import { analyzeBrowserImage } from '../vision-analyze'
+import { analyzeBrowserImage, analyzeDesktopImage } from '../vision-analyze'
 import { diffWorkspace, snapshotWorkspace } from '../workspace-changes'
 
 const PYTHON_FALLBACK = 'python.exe'
@@ -59,7 +59,7 @@ function buildCoreTools(): ToolDefinition[] {
       suspendOverlay: suspendControlOverlay,
       resumeOverlay: resumeControlOverlay,
       highlight: highlightControl,
-      analyzeImage: analyzeBrowserImage,
+      analyzeImage: analyzeDesktopImage,
       pythonPath: () =>
         state.python.currentPythonPath() ||
         (app.isPackaged

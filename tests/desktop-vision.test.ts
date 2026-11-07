@@ -9,6 +9,7 @@ vi.mock('electron', () => ({
 }))
 
 import { DESKTOP_TOOL_NAMES, createDesktopTools, parseVisualAction } from '../app/src/main/agent/tools/desktop'
+import { controlMissHint } from '../app/src/main/agent/tools/desktop/tools'
 
 const context = {
   workspace: 'D:\\desk\\demo',
@@ -76,4 +77,20 @@ describe('desktop vision', () => {
     expect(tools.length).toBeGreaterThan(0)
     expect(tools.map((tool) => tool.name).filter((name) => !gated.has(name))).toEqual([])
   })
+
+  it('nudges the model from control hunting to coordinate clicking', () => {
+    expect(controlMissHint(1)).toContain('screen_act')
+    expect(controlMissHint(1)).not.toContain('禁止继续')
+    expect(controlMissHint(2)).toContain('禁止继续 ui_snapshot/ui_click')
+    expect(controlMissHint(3)).toContain('3 次')
+  })
+
+  it('clicks a described control in one step without touching the mouse when unsure', async () => {
+    const tools = createDesktopTools(() => null, {
+      analyzeImage: async () => '{"action":"done","message":"没看到"}'
+    })
+    const tool = tools.find((item) => item.name === 'screen_click_target')!
+    const result = await tool.execute({ target: '发送按钮' }, context)
+    expect(result.output).toContain('没有在屏幕上看到「发送按钮」')
+  }, 45_000)
 })

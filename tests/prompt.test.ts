@@ -38,6 +38,14 @@ describe('DSH-aligned system prompt', () => {
     expect(prompt).toContain('screen_ocr(region_x=')
   })
 
+  it('prefers clicking what the model can see over enumerating controls', () => {
+    expect(prompt).toContain('看见什么点什么')
+    expect(prompt).toContain('不要先 `ui_snapshot` 枚举控件')
+    expect(prompt).toContain('screen_click_target(target="发送按钮")')
+    expect(prompt).toContain('连续 2 次找不到控件')
+    expect(prompt).toContain('禁止继续枚举')
+  })
+
   it('names the real tool surface and Windows-specific rules', () => {
     expect(prompt).toContain('`read_file`')
     expect(prompt).toContain('`edit_file`')
