@@ -9,7 +9,6 @@ vi.mock('electron', () => ({
 }))
 
 import { DESKTOP_TOOL_NAMES, createDesktopTools, parseVisualAction } from '../app/src/main/agent/tools/desktop'
-import { controlMissHint } from '../app/src/main/agent/tools/desktop/tools'
 
 const context = {
   workspace: 'D:\\desk\\demo',
@@ -78,11 +77,14 @@ describe('desktop vision', () => {
     expect(tools.map((tool) => tool.name).filter((name) => !gated.has(name))).toEqual([])
   })
 
-  it('nudges the model from control hunting to coordinate clicking', () => {
-    expect(controlMissHint(1)).toContain('screen_act')
-    expect(controlMissHint(1)).not.toContain('禁止继续')
-    expect(controlMissHint(2)).toContain('禁止继续 ui_snapshot/ui_click')
-    expect(controlMissHint(3)).toContain('3 次')
+  it('only exposes human-shaped desktop tools', () => {
+    const tools = createDesktopTools(() => null, {})
+    const names = tools.map((tool) => tool.name)
+    expect(names).not.toContain('ui_snapshot')
+    expect(names).not.toContain('ui_click')
+    expect(names).not.toContain('screen_edges')
+    expect(names).toContain('screen_click_target')
+    expect(names).toContain('window_focus')
   })
 
   it('clicks a described control in one step without touching the mouse when unsure', async () => {

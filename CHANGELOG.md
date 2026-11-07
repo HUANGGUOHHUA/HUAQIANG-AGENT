@@ -35,6 +35,7 @@
 - `run_command` 拒绝内联 Win32 鼠标/键盘调用和临时 OCR 脚本，引导改用鼠标、键盘和识屏工具
 - `screen_ocr` 默认只识别前台窗口，双屏/桌面图标不再混进聊天窗口的文字里；需要整屏时传 `scope="screen"`
 - 新增 `window_focus(title=...)`：按标题切窗口并返回屏幕矩形，不再需要自己写 `SetForegroundWindow` 脚本
+- 桌面工具收敛为“像人一样”的一组：移除 `ui_snapshot` / `ui_click` / `screen_edges`，只保留看（OCR/视觉）、点（按描述/按文字）、输入、切窗口
 - 清理未使用的导入、类型和变量
 - 版本号更新至 1.0.4
 

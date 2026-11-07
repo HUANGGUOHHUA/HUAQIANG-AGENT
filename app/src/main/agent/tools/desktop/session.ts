@@ -13,15 +13,12 @@ import {
   KEYBOARD_SCRIPT,
   MOUSE_SCRIPT,
   SCREEN_SCRIPT,
-  UI_SCRIPT,
   WINDOW_FOCUS_SCRIPT
 } from './scripts'
-import { SnapshotCache, parseUiItems, type UiSnapshotItem } from './snapshot'
 import type { ScreenBounds } from './visual'
 
 const SCREEN_SETTLE_MS = 300
 const SCREEN_TIMEOUT = 20_000
-const SNAPSHOT_TIMEOUT = 25_000
 const MOUSE_TIMEOUT = 12_000
 const DRAG_TIMEOUT = 15_000
 const KEYBOARD_TIMEOUT = 20_000
@@ -146,23 +143,17 @@ function parseBounds(raw: string): ScreenBounds {
 }
 
 /**
- * 一次桌面任务的状态：截图、OCR、UIA 快照缓存和所有输入动作。
+ * 一次桌面任务的状态：截图、OCR 和所有输入动作。
  * 工具定义只描述参数，真正的系统调用都收敛到这里，避免每个工具重复
  * “高亮 → 执行 → 等待 → 失效缓存”的样板代码。
  */
 export class DesktopSession {
-  private readonly cache = new SnapshotCache()
   private rapidUnavailable = false
 
   constructor(
     private readonly getWindow: () => BrowserWindow | null,
     private readonly options: DesktopToolOptions
   ) {}
-
-  /** 清除 UIA 快照缓存：任何一次输入之后界面都可能变化。 */
-  invalidate(): void {
-    this.cache.clear()
-  }
 
   async capture(holdApp = false, withForeground = false): Promise<ScreenCapture> {
     this.options.suspendOverlay?.()
@@ -206,7 +197,6 @@ export class DesktopSession {
       DRAG_TIMEOUT
     )
     if (!raw || raw === 'notfound') return null
-    this.invalidate()
     return parseWindowLine(raw)
   }
 
@@ -247,30 +237,7 @@ export class DesktopSession {
     return { ...result, engine: 'windows', region: undefined }
   }
 
-  /** 重新枚举 UIA 树并写入缓存；raw 是脚本原始输出，直接回给模型。 */
-  async snapshot(max = 150): Promise<{ items: UiSnapshotItem[]; raw: string }> {
-    const raw = await runPowerShell(
-      'ui-snapshot',
-      UI_SCRIPT,
-      ['-Max', String(max), '-ExcludePid', String(process.pid)],
-      SNAPSHOT_TIMEOUT
-    )
-    const items = parseUiItems(raw)
-    this.cache.set(items)
-    return { items, raw }
-  }
-
-  /** 未过期时返回上一次快照，否则返回 null。 */
-  cachedItems(): UiSnapshotItem[] | null {
-    return this.cache.get()
-  }
-
-  /** 先用最近的快照，必要时（首次或已过期）重新枚举。 */
-  async items(): Promise<UiSnapshotItem[]> {
-    return this.cache.get() ?? (await this.snapshot()).items
-  }
-
-  /** 用 fast Windows OCR 找到文字并点击中心，供 screen_click 和 ui_click 回退共用。 */
+  /** 用快速 Windows OCR 找到文字并点击中心，供 screen_click 使用。 */
   async clickText(text: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
     const shot = await this.capture()
     try {
@@ -295,7 +262,6 @@ export class DesktopSession {
         MOUSE_TIMEOUT
       )
       await waitFor(POST_MOUSE_DELAY_MS, signal)
-      this.invalidate()
       return `已通过屏幕文字点击「${line.text}」中心 (${x}, ${y})`
     } finally {
       await unlink(shot.path).catch(() => undefined)
@@ -319,7 +285,6 @@ export class DesktopSession {
       MOUSE_TIMEOUT
     )
     await waitFor(POST_MOUSE_DELAY_MS, options.signal)
-    this.invalidate()
   }
 
   async move(x: number, y: number, options: { signal: AbortSignal; durationMs?: number }): Promise<void> {
@@ -331,7 +296,6 @@ export class DesktopSession {
       MOUSE_TIMEOUT
     )
     await waitFor(POST_MOUSE_DELAY_MS, options.signal)
-    this.invalidate()
   }
 
   async drag(
@@ -349,7 +313,6 @@ export class DesktopSession {
       DRAG_TIMEOUT
     )
     await waitFor(POST_MOUSE_DELAY_MS, options.signal)
-    this.invalidate()
   }
 
   async scroll(amount: number, point?: { x: number; y: number }, signal?: AbortSignal): Promise<void> {
@@ -367,7 +330,6 @@ export class DesktopSession {
       MOUSE_TIMEOUT
     )
     if (signal) await waitFor(POST_MOUSE_DELAY_MS, signal)
-    this.invalidate()
   }
 
   /** 输入文字；SendInput 被安全软件拦截时脚本会自动改用剪贴板粘贴。 */
@@ -379,7 +341,6 @@ export class DesktopSession {
       ['-Action', 'type', '-EncodedText', encoded],
       KEYBOARD_TIMEOUT
     )
-    this.invalidate()
     return mode === 'clipboard' ? 'clipboard' : 'sendinput'
   }
 
@@ -390,7 +351,6 @@ export class DesktopSession {
       ['-Action', 'press', '-Keys', keys],
       MOUSE_TIMEOUT
     )
-    this.invalidate()
   }
 
   async pasteText(text: string): Promise<void> {
@@ -401,7 +361,6 @@ export class DesktopSession {
       ['-EncodedText', encoded, '-WaitMs', '600'],
       DRAG_TIMEOUT
     )
-    this.invalidate()
   }
 
   async pasteFiles(paths: string[]): Promise<void> {
@@ -412,6 +371,5 @@ export class DesktopSession {
       ['-EncodedPaths', encoded, '-WaitMs', '900'],
       20_000
     )
-    this.invalidate()
   }
 }
