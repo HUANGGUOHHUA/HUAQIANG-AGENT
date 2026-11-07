@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import type { BrowserWindow } from 'electron'
 import { detectEdges } from '../../attachments/edges'
-import { ocrImage, ocrImageBoxes } from '../../attachments/ocr'
+import { detectRapidOcr } from '../../attachments/rapidocr'
+import { normalizeOcrText, ocrImageBoxes } from '../../attachments/ocr'
 import type { ToolDefinition } from './types'
 import { ToolError, boolArg, numberArg, stringArg, truncate } from './types'
 
@@ -632,7 +633,7 @@ export function createDesktopTools(
   ): Promise<{ output: string }> => {
     const shot = await captureVirtualScreen()
     try {
-      const ocr = await ocrImageBoxes(shot.path)
+      const ocr = await ocrBoxes(shot.path)
       const normalize = (value: string): string => value.replace(/\s+/g, '').toLowerCase()
       const wanted = normalize(text)
       const candidates = ocr.lines.filter((line) => normalize(line.text).includes(wanted))
@@ -665,6 +666,52 @@ export function createDesktopTools(
     } finally {
       await unlink(shot.path).catch(() => undefined)
     }
+  }
+
+  let rapidUnavailable = false
+  const ocrBoxes = async (
+    path: string,
+    opts: {
+      useRapid?: boolean
+      region?: { x: number; y: number; width: number; height: number }
+    } = {}
+  ): Promise<{
+    width: number
+    height: number
+    engine: 'rapidocr' | 'windows'
+    region?: { x: number; y: number; width: number; height: number }
+    lines: Array<{ text: string; x: number; y: number; width: number; height: number }>
+  }> => {
+    if (opts.useRapid && !rapidUnavailable) {
+      try {
+        const result = await detectRapidOcr(
+          path,
+          options.pythonPath?.() || 'python.exe',
+          45_000,
+          opts.region
+        )
+        if (result.lines.length) {
+          return {
+            width: result.width,
+            height: result.height,
+            engine: 'rapidocr',
+            region: opts.region,
+            lines: result.lines.map((line) => ({
+              text: normalizeOcrText(line.text),
+              x: line.x,
+              y: line.y,
+              width: line.width,
+              height: line.height
+            }))
+          }
+        }
+      } catch {
+        // Keep Windows OCR as a working fallback when RapidOCR is not bundled.
+        rapidUnavailable = true
+      }
+    }
+    const result = await ocrImageBoxes(path)
+    return { ...result, engine: 'windows', region: undefined }
   }
 
   return [
@@ -700,14 +747,23 @@ export function createDesktopTools(
       displayName: '读取屏幕文字',
       risk: 'read',
       description:
-        '截取整个虚拟桌面并用 Windows 本地 OCR 识别文字。默认返回每行文字及其虚拟桌面绝对坐标（x/y/width/height），可直接用于判断位置；不需要坐标时传 with_boxes=false。只想点击某段文字时直接用 screen_click(text)。',
+        '截取整个虚拟桌面并识别文字。默认使用 RapidOCR（PP-OCRv6 small），失败时回退 Windows OCR；返回每行文字及其虚拟桌面绝对坐标（x/y/width/height）和当前引擎。不需要坐标时传 with_boxes=false。只想点击某段文字时直接用 screen_click(text)。',
       inputSchema: {
         type: 'object',
         properties: {
           with_boxes: {
             type: 'boolean',
             description: '是否返回每行文字的 x/y/width/height，默认 true'
-          }
+          },
+          engine: {
+            type: 'string',
+            enum: ['auto', 'windows', 'rapidocr'],
+            description: 'auto：全屏用 Windows OCR，指定区域用 RapidOCR；windows：强制 Windows；rapidocr：强制 RapidOCR'
+          },
+          region_x: { type: 'number', description: '可选，只识别区域的 X 坐标' },
+          region_y: { type: 'number', description: '可选，只识别区域的 Y 坐标' },
+          region_width: { type: 'number', description: '可选，只识别区域的宽度' },
+          region_height: { type: 'number', description: '可选，只识别区域的高度' }
         },
         additionalProperties: false
       },
@@ -743,21 +799,39 @@ export function createDesktopTools(
               ? `虚拟桌面：x=${x} y=${y} ${width}x${height}`
               : '虚拟桌面：尺寸未知'
           const withBoxes = boolArg(args, 'with_boxes', true)
+          const regionWidth = numberArg(args, 'region_width', 0, 0, 100_000)
+          const regionHeight = numberArg(args, 'region_height', 0, 0, 100_000)
+          const region =
+            regionWidth > 0 && regionHeight > 0
+              ? {
+                  x: numberArg(args, 'region_x', 0, -100_000, 100_000),
+                  y: numberArg(args, 'region_y', 0, -100_000, 100_000),
+                  width: regionWidth,
+                  height: regionHeight
+                }
+              : undefined
+          const requestedEngine = stringArg(args, 'engine', { fallback: 'auto' })
+          const useRapid =
+            requestedEngine === 'rapidocr' ||
+            (requestedEngine !== 'windows' && Boolean(region))
+          const boxes = await ocrBoxes(path, { useRapid, region })
+          const offsetX = originX + (boxes.region?.x ?? 0)
+          const offsetY = originY + (boxes.region?.y ?? 0)
+          const engine = `OCR：${boxes.engine === 'rapidocr' ? 'RapidOCR' : 'Windows OCR'}`
           if (!withBoxes) {
-            const text = await ocrImage(path)
+            const text = boxes.lines.map((line) => line.text).join('\n')
             return {
-              output: truncate(`${range}\n${text || '（未识别到文字）'}`, 40_000)
+              output: truncate(`${range}\n${engine}\n${text || '（未识别到文字）'}`, 40_000)
             }
           }
-          const boxes = await ocrImageBoxes(path)
           const lines = boxes.lines
             .map(
               (line, index) =>
-                `${index + 1}. x=${Math.round(originX + line.x)} y=${Math.round(originY + line.y)} w=${line.width} h=${line.height} | ${line.text}`
+                `${index + 1}. x=${Math.round(offsetX + line.x)} y=${Math.round(offsetY + line.y)} w=${line.width} h=${line.height} | ${line.text}`
             )
             .join('\n')
           return {
-            output: truncate(`${range}\n${lines || '（未识别到文字）'}`, 40_000)
+            output: truncate(`${range}\n${engine}\n${lines || '（未识别到文字）'}`, 40_000)
           }
         } finally {
           await unlink(path).catch(() => undefined)
