@@ -4,7 +4,7 @@ import { detectEdges } from '../../../attachments/edges'
 import { boolArg, numberArg, stringArg, ToolError, truncate } from '../types'
 import type { ToolDefinition } from '../types'
 import { POST_MOUSE_DELAY_MS, waitFor } from './powershell'
-import { DesktopSession, normalizeButton, type DesktopToolOptions } from './session'
+import { DesktopSession, linesInWindow, normalizeButton, type DesktopToolOptions } from './session'
 import { pickUiItem, type UiSnapshotItem } from './snapshot'
 import { buildVisualPrompt, parseVisualAction } from './visual'
 
@@ -71,7 +71,7 @@ export function createDesktopTools(
       displayName: '读取屏幕文字',
       risk: 'read',
       description:
-        '截取整个虚拟桌面并识别文字。默认使用开源 RapidOCR（PP-OCRv6 small），全屏和区域都适用；RapidOCR 失败自动回退 Windows OCR。返回每行文字及其虚拟桌面绝对坐标（x/y/width/height）和当前引擎。不需要坐标时传 with_boxes=false。只想快速点击某段文字时直接用 screen_click(text)。',
+        '截取屏幕并识别文字，默认只返回前台窗口内的文字（用户正在用的程序），不会把桌面图标和另一块屏的内容混进来。默认用开源 RapidOCR（PP-OCRv6 small），失败自动回退 Windows OCR。返回每行文字及其虚拟桌面绝对坐标（x/y/width/height）和当前引擎。需要整个桌面（例如找桌面图标）时传 scope="screen"；只需要某个矩形时传 region_*。只想快速点击某段文字时直接用 screen_click(text)。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -84,6 +84,11 @@ export function createDesktopTools(
             enum: ['auto', 'windows', 'rapidocr'],
             description: '默认 rapidocr；windows 仅用于快速模式或 RapidOCR 失败时手动回退'
           },
+          scope: {
+            type: 'string',
+            enum: ['window', 'screen'],
+            description: '识别范围：默认 window 只识别前台窗口；screen 识别整个虚拟桌面'
+          },
           region_x: { type: 'number', description: '可选，只识别区域的 X 坐标' },
           region_y: { type: 'number', description: '可选，只识别区域的 Y 坐标' },
           region_width: { type: 'number', description: '可选，只识别区域的宽度' },
@@ -91,9 +96,10 @@ export function createDesktopTools(
         },
         additionalProperties: false
       },
-      summarize: () => '截取全部显示器并识别文字坐标',
+      summarize: () => '识别前台窗口文字',
       execute: async (args) => {
         const withBoxes = boolArg(args, 'with_boxes', true)
+        const scope = stringArg(args, 'scope', { fallback: 'window' }) === 'screen' ? 'screen' : 'window'
         const regionWidth = numberArg(args, 'region_width', 0, 0, 100_000)
         const regionHeight = numberArg(args, 'region_height', 0, 0, 100_000)
         const region =
@@ -106,27 +112,53 @@ export function createDesktopTools(
               }
             : undefined
         const useRapid = stringArg(args, 'engine', { fallback: 'rapidocr' }) !== 'windows'
-        const shot = await session.capture()
+        // 只有“前台窗口范围”才需要额外查询前台窗口；显式区域或整屏都不需要。
+        const shot = await session.capture(false, scope === 'window' && !region)
         try {
           const boxes = await session.ocr(shot.path, { useRapid, region })
           const originX = shot.bounds.x + (boxes.region?.x ?? 0)
           const originY = shot.bounds.y + (boxes.region?.y ?? 0)
           const range = `虚拟桌面：x=${shot.bounds.x} y=${shot.bounds.y} ${shot.bounds.width}x${shot.bounds.height}`
           const engine = `OCR：${boxes.engine === 'rapidocr' ? 'RapidOCR' : 'Windows OCR'}`
+          const found = boxes.lines.map((line) => ({
+            text: line.text,
+            x: originX + line.x,
+            y: originY + line.y,
+            width: line.width,
+            height: line.height
+          }))
+          const foreground = shot.foreground
+          let lines = found
+          let scopeNote = ''
+          if (scope === 'window' && !region && foreground) {
+            const inside = linesInWindow(found, foreground)
+            scopeNote = `识别范围：前台窗口「${foreground.title}」x=${foreground.x} y=${foreground.y} ${foreground.width}x${foreground.height}`
+            if (inside.length) {
+              lines = inside
+            } else if (found.length) {
+              scopeNote += '（窗口内没识别到文字，已返回全屏结果）'
+            }
+          } else if (scope === 'screen' || region) {
+            scopeNote = '识别范围：整个虚拟桌面'
+          }
+
           if (!withBoxes) {
-            const text = boxes.lines.map((line) => line.text).join('\n')
+            const text = lines.map((line) => line.text).join('\n')
             return {
-              output: truncate(`${range}\n${engine}\n${text || '（未识别到文字）'}`, 40_000)
+              output: truncate(
+                `${range}\n${scopeNote}\n${engine}\n${text || '（未识别到文字）'}`,
+                40_000
+              )
             }
           }
-          const lines = boxes.lines
+          const body = lines
             .map(
               (line, index) =>
-                `${index + 1}. x=${Math.round(originX + line.x)} y=${Math.round(originY + line.y)} w=${line.width} h=${line.height} | ${line.text}`
+                `${index + 1}. x=${Math.round(line.x)} y=${Math.round(line.y)} w=${line.width} h=${line.height} | ${line.text}`
             )
             .join('\n')
           return {
-            output: truncate(`${range}\n${engine}\n${lines || '（未识别到文字）'}`, 40_000)
+            output: truncate(`${range}\n${scopeNote}\n${engine}\n${body || '（未识别到文字）'}`, 40_000)
           }
         } finally {
           await unlink(shot.path).catch(() => undefined)
@@ -423,6 +455,31 @@ export function createDesktopTools(
         } finally {
           shot.restore()
           await unlink(shot.path).catch(() => undefined)
+        }
+      }
+    },
+    {
+      name: 'window_focus',
+      displayName: '切换到窗口',
+      risk: 'exec',
+      description:
+        '按标题把窗口切到前台，并返回它的屏幕矩形（x/y/width/height）。标题包含匹配即可，例如 window_focus(title="QQ")。切换后配合 screen_ocr / screen_click_target 操作；不要自己写 SetForegroundWindow 脚本。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '窗口标题的一部分，例如 QQ、微信、PyCharm' }
+        },
+        required: ['title'],
+        additionalProperties: false
+      },
+      summarize: (args) => `切换到窗口「${stringArg(args, 'title').slice(0, 40)}」`,
+      execute: async (args) => {
+        const title = stringArg(args, 'title', { required: true, max: 200 }).trim()
+        if (!title) throw new ToolError('title 不能为空')
+        const win = await session.focusWindow(title)
+        if (!win) throw new ToolError(`没有找到标题包含「${title}」的窗口`)
+        return {
+          output: `已切到「${win.title}」：x=${win.x} y=${win.y} ${win.width}x${win.height}`
         }
       }
     },

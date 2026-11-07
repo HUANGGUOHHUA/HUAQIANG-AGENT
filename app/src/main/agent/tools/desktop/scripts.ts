@@ -558,3 +558,72 @@ try {
 }
 Write-Output "$($bounds.X),$($bounds.Y),$($bounds.Width),$($bounds.Height)"
 `
+
+// 读取当前前台窗口（截图时用来限定 OCR 范围）。
+export const FOREGROUND_SCRIPT = String.raw`param()
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class HqForeground
+{
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+}
+'@
+$h = [HqForeground]::GetForegroundWindow()
+if ($h -eq [IntPtr]::Zero) { Write-Output 'none'; exit 0 }
+$sb = New-Object System.Text.StringBuilder 512
+[void][HqForeground]::GetWindowText($h, $sb, 512)
+$rect = New-Object HqForeground+RECT
+if (-not [HqForeground]::GetWindowRect($h, [ref]$rect)) { Write-Output 'none'; exit 0 }
+$width = $rect.Right - $rect.Left
+$height = $rect.Bottom - $rect.Top
+if ($width -le 0 -or $height -le 0) { Write-Output 'none'; exit 0 }
+Write-Output ("{0}|{1},{2},{3},{4}" -f $sb.ToString(), $rect.Left, $rect.Top, $width, $height)
+`
+
+// 按标题把窗口切到前台，返回标题和屏幕矩形。
+export const WINDOW_FOCUS_SCRIPT = String.raw`param([string]$Title)
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class HqFocus
+{
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+}
+'@
+$proc = Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle -like "*$Title*" } |
+    Select-Object -First 1
+if (-not $proc) { Write-Output 'notfound'; exit 0 }
+$h = $proc.MainWindowHandle
+[void][HqFocus]::ShowWindow($h, 9)
+[void][HqFocus]::SetForegroundWindow($h)
+Start-Sleep -Milliseconds 250
+if ([HqFocus]::GetForegroundWindow() -ne $h) {
+    # 前台切换可能被系统拒绝，退化成还原窗口再试一次。
+    [void][HqFocus]::ShowWindow($h, 5)
+    [void][HqFocus]::SetForegroundWindow($h)
+    Start-Sleep -Milliseconds 200
+}
+$rect = New-Object HqFocus+RECT
+[void][HqFocus]::GetWindowRect($h, [ref]$rect)
+$width = $rect.Right - $rect.Left
+$height = $rect.Bottom - $rect.Top
+Write-Output ("{0}|{1},{2},{3},{4}" -f $proc.MainWindowTitle, $rect.Left, $rect.Top, $width, $height)
+`

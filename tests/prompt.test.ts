@@ -35,7 +35,8 @@ describe('DSH-aligned system prompt', () => {
     expect(prompt).toContain('`browser_document_title`')
     expect(prompt).toContain('`screen_click(text=...)`')
     expect(prompt).toContain('RapidOCR')
-    expect(prompt).toContain('screen_ocr(region_x=')
+    expect(prompt).toContain('`screen_ocr`')
+    expect(prompt).toContain('region_x/y/width/height')
   })
 
   it('prefers clicking what the model can see over enumerating controls', () => {
@@ -44,6 +45,8 @@ describe('DSH-aligned system prompt', () => {
     expect(prompt).toContain('screen_click_target(target="发送按钮")')
     expect(prompt).toContain('连续 2 次找不到控件')
     expect(prompt).toContain('禁止继续枚举')
+    expect(prompt).toContain('`scope="screen"`')
+    expect(prompt).toContain('window_focus(title="QQ")')
   })
 
   it('names the real tool surface and Windows-specific rules', () => {

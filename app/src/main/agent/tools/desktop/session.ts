@@ -9,10 +9,12 @@ import { POST_MOUSE_DELAY_MS, runPowerShell, waitFor } from './powershell'
 import {
   CLIPBOARD_PASTE_SCRIPT,
   CLIPBOARD_TEXT_SCRIPT,
+  FOREGROUND_SCRIPT,
   KEYBOARD_SCRIPT,
   MOUSE_SCRIPT,
   SCREEN_SCRIPT,
-  UI_SCRIPT
+  UI_SCRIPT,
+  WINDOW_FOCUS_SCRIPT
 } from './scripts'
 import { SnapshotCache, parseUiItems, type UiSnapshotItem } from './snapshot'
 import type { ScreenBounds } from './visual'
@@ -24,11 +26,48 @@ const MOUSE_TIMEOUT = 12_000
 const DRAG_TIMEOUT = 15_000
 const KEYBOARD_TIMEOUT = 20_000
 
+/** 一个可见窗口的屏幕矩形。 */
+export interface WindowBounds {
+  title: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface ScreenCapture {
   path: string
   bounds: ScreenBounds
+  /** 截图瞬间的前台窗口；未请求或系统没有前台窗口时为空。 */
+  foreground?: WindowBounds | null
   /** 恢复被隐藏的窗口与覆盖层；可重复调用。 */
   restore: () => void
+}
+
+/** 只保留中心点落在窗口矩形内的文字行。 */
+export function linesInWindow<T extends { x: number; y: number; width: number; height: number }>(
+  lines: T[],
+  win: { x: number; y: number; width: number; height: number }
+): T[] {
+  return lines.filter((line) => {
+    const cx = line.x + line.width / 2
+    const cy = line.y + line.height / 2
+    return cx >= win.x && cx <= win.x + win.width && cy >= win.y && cy <= win.y + win.height
+  })
+}
+
+/** 解析脚本输出的 `title|x,y,width,height`；标题里允许出现竖线。 */
+export function parseWindowLine(raw: string): WindowBounds | null {
+  const bar = raw.lastIndexOf('|')
+  if (bar <= 0) return null
+  const parts = raw
+    .slice(bar + 1)
+    .split(',')
+    .map((value) => Number(value))
+  if (parts.length !== 4) return null
+  const [x, y, width, height] = parts
+  if (![x, y, width, height].every((value) => Number.isFinite(value))) return null
+  return { title: raw.slice(0, bar).trim(), x, y, width, height }
 }
 
 export interface OcrLine {
@@ -125,7 +164,7 @@ export class DesktopSession {
     this.cache.clear()
   }
 
-  async capture(holdApp = false): Promise<ScreenCapture> {
+  async capture(holdApp = false, withForeground = false): Promise<ScreenCapture> {
     this.options.suspendOverlay?.()
     const win = this.getWindow()
     const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible())
@@ -142,12 +181,33 @@ export class DesktopSession {
     }
     try {
       await new Promise((resolve) => setTimeout(resolve, SCREEN_SETTLE_MS))
+      // 隐藏自己的窗口后，前台就是用户真正在用的那个程序。
+      const foreground = withForeground ? await this.foregroundWindow().catch(() => null) : null
       const path = join(tmpdir(), `huaqiang-screen-${Date.now()}.png`)
       const raw = await runPowerShell('desktop-screen', SCREEN_SCRIPT, ['-Path', path], SCREEN_TIMEOUT)
-      return { path, bounds: parseBounds(raw), restore }
+      return { path, bounds: parseBounds(raw), foreground, restore }
     } finally {
       if (!holdApp) restore()
     }
+  }
+
+  /** 截图瞬间的前台窗口，用来把 OCR 限定在用户正在看的窗口里。 */
+  async foregroundWindow(): Promise<WindowBounds | null> {
+    const raw = await runPowerShell('desktop-foreground', FOREGROUND_SCRIPT, [], 8_000)
+    return raw && raw !== 'none' ? parseWindowLine(raw) : null
+  }
+
+  /** 按标题包含匹配把窗口切到前台，返回它切换后的矩形。 */
+  async focusWindow(title: string): Promise<WindowBounds | null> {
+    const raw = await runPowerShell(
+      'desktop-focus',
+      WINDOW_FOCUS_SCRIPT,
+      ['-Title', title],
+      DRAG_TIMEOUT
+    )
+    if (!raw || raw === 'notfound') return null
+    this.invalidate()
+    return parseWindowLine(raw)
   }
 
   /** 识别截图文字；RapidOCR 不可用时自动降级到 Windows OCR。 */
