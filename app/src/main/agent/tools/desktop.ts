@@ -221,6 +221,47 @@ try {
 Write-Output 'ok'
 `
 
+const CLIPBOARD_TEXT_SCRIPT = String.raw`param(
+  [string]$EncodedText,
+  [int]$WaitMs = 600
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedText))
+$oldText = ''
+$oldFiles = $null
+$oldImage = $null
+$oldHtml = ''
+$oldRtf = ''
+try { $oldFiles = [System.Windows.Forms.Clipboard]::GetFileDropList() } catch { }
+try { $oldText = [System.Windows.Forms.Clipboard]::GetText() } catch { }
+try { $oldImage = [System.Windows.Forms.Clipboard]::GetImage() } catch { }
+try { $oldHtml = [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Html) } catch { }
+try { $oldRtf = [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Rtf) } catch { }
+try {
+  [System.Windows.Forms.Clipboard]::SetText($text)
+  Start-Sleep -Milliseconds 120
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  Start-Sleep -Milliseconds ([Math]::Max(150, [Math]::Min(3000, $WaitMs)))
+} finally {
+  $restore = New-Object System.Windows.Forms.DataObject
+  if ($oldFiles -and $oldFiles.Count -gt 0) {
+    $restore.SetFileDropList($oldFiles)
+  } elseif ($oldImage) {
+    $restore.SetImage($oldImage)
+  } elseif ($oldText) {
+    $restore.SetText($oldText)
+  } elseif ($oldHtml) {
+    $restore.SetText($oldHtml, [System.Windows.Forms.TextDataFormat]::Html)
+  } elseif ($oldRtf) {
+    $restore.SetText($oldRtf, [System.Windows.Forms.TextDataFormat]::Rtf)
+  }
+  [System.Windows.Forms.Clipboard]::SetDataObject($restore, $true)
+}
+Write-Output 'ok'
+`
+
 const KEYBOARD_SCRIPT = String.raw`param(
   [string]$Action,
   [string]$EncodedText = '',
@@ -638,7 +679,11 @@ function mouseArgs(action: string, args: Record<string, unknown>): string[] {
 export type VisualAction =
   | { action: 'click'; x: number; y: number; clicks?: number; button?: 'left' | 'right' | 'middle' }
   | { action: 'double_click'; x: number; y: number }
+  | { action: 'move'; x: number; y: number }
+  | { action: 'right_click'; x: number; y: number }
+  | { action: 'drag'; x: number; y: number; toX: number; toY: number }
   | { action: 'type'; text: string }
+  | { action: 'paste_text'; text: string }
   | { action: 'paste_file'; paths: string[] }
   | { action: 'press'; keys: string }
   | { action: 'scroll'; amount: number; x?: number; y?: number }
@@ -655,18 +700,34 @@ export function parseVisualAction(raw: string): VisualAction {
     throw new ToolError(`视觉动作 JSON 无法解析：${match[0].slice(0, 200)}`)
   }
   const action = typeof value.action === 'string' ? value.action.toLowerCase() : ''
-  if (action === 'click' || action === 'double_click') {
+  if (action === 'click' || action === 'double_click' || action === 'move' || action === 'right_click') {
     const x = Number(value.x)
     const y = Number(value.y)
-    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new ToolError('click 缺少有效 x/y')
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new ToolError(`${action} 缺少有效 x/y`)
     if (action === 'double_click') return { action, x: Math.round(x), y: Math.round(y) }
+    if (action === 'move') return { action, x: Math.round(x), y: Math.round(y) }
+    if (action === 'right_click') return { action, x: Math.round(x), y: Math.round(y) }
     const button = value.button === 'right' || value.button === 'middle' ? value.button : 'left'
     const clicks = Math.max(1, Math.min(3, Math.round(Number(value.clicks ?? 1))))
     return { action: 'click', x: Math.round(x), y: Math.round(y), clicks, button }
   }
-  if (action === 'type') {
+  if (action === 'drag') {
+    const x = Number(value.x)
+    const y = Number(value.y)
+    const toX = Number(value.toX ?? value.to_x)
+    const toY = Number(value.toY ?? value.to_y)
+    if (![x, y, toX, toY].every(Number.isFinite)) throw new ToolError('drag 缺少有效坐标')
+    return {
+      action,
+      x: Math.round(x),
+      y: Math.round(y),
+      toX: Math.round(toX),
+      toY: Math.round(toY)
+    }
+  }
+  if (action === 'type' || action === 'paste_text') {
     const text = typeof value.text === 'string' ? value.text.slice(0, 4000) : ''
-    if (!text) throw new ToolError('type 缺少 text')
+    if (!text) throw new ToolError(`${action} 缺少 text`)
     return { action, text }
   }
   if (action === 'paste_file') {
@@ -679,10 +740,10 @@ export function parseVisualAction(raw: string): VisualAction {
     if (!paths.length) throw new ToolError('paste_file 缺少有效的 path/paths')
     return { action, paths }
   }
-  if (action === 'press') {
+  if (action === 'press' || action === 'hotkey') {
     const keys = typeof value.keys === 'string' ? value.keys.slice(0, 200).trim() : ''
-    if (!keys) throw new ToolError('press 缺少 keys')
-    return { action, keys }
+    if (!keys) throw new ToolError(`${action} 缺少 keys`)
+    return { action: 'press', keys }
   }
   if (action === 'scroll') {
     const amount = Math.round(Number(value.amount))
@@ -1016,7 +1077,7 @@ export function createDesktopTools(
       displayName: '视觉操作桌面',
       risk: 'exec',
       description:
-        '通用视觉操作：截屏交给当前视觉模型，模型返回一个 JSON 动作（click/double_click/type/press/scroll/wait/done），程序执行该动作。适合没有 UIA/DOM 的 QQ、微信、远程桌面等界面；不需要为每个应用写专用代码。每次只执行一个动作，下一步重新截图。',
+        '通用视觉操作：截屏交给当前视觉模型，模型返回一个 JSON 动作（click/double_click/right_click/move/drag/type/paste_text/paste_file/press/scroll/wait/done），程序执行该动作。适合任何没有 UIA/DOM 的桌面程序、聊天工具、远程桌面、安装器和设置面板；不需要为每个应用写专用代码。每次只执行一个动作，下一步重新截图。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1043,9 +1104,14 @@ export function createDesktopTools(
               '允许的动作：',
               '{"action":"click","x":123,"y":456}',
               '{"action":"double_click","x":123,"y":456}',
+              '{"action":"right_click","x":123,"y":456}',
+              '{"action":"move","x":123,"y":456}',
+              '{"action":"drag","x":123,"y":456,"toX":600,"toY":300}',
               '{"action":"type","text":"要输入的文字"}',
+              '{"action":"paste_text","text":"粘贴输入的文字"}',
               '{"action":"paste_file","path":"D:\\\\path\\\\file.zip"}',
               '{"action":"press","keys":"ENTER"}',
+              '{"action":"hotkey","keys":"CTRL+S"}',
               '{"action":"scroll","amount":-3}',
               '{"action":"wait","ms":500}',
               '{"action":"done","message":"完成说明"}',
@@ -1065,6 +1131,48 @@ export function createDesktopTools(
           if (action.action === 'wait') {
             await waitFor(action.ms, context.signal)
             return { output: `视觉操作等待 ${action.ms}ms` }
+          }
+          if (action.action === 'move') {
+            const moveX = Math.round(shot.bounds.x + action.x)
+            const moveY = Math.round(shot.bounds.y + action.y)
+            options.highlight?.({ x: moveX, y: moveY, label: '视觉移动' })
+            await runPowerShell(
+              'desktop-mouse',
+              MOUSE_SCRIPT,
+              mouseArgs('move', { x: moveX, y: moveY }),
+              12_000
+            )
+            await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+            uiCache = null
+            return { output: `视觉操作移动 (${moveX}, ${moveY})` }
+          }
+          if (action.action === 'drag') {
+            const fromX = Math.round(shot.bounds.x + action.x)
+            const fromY = Math.round(shot.bounds.y + action.y)
+            const toX = Math.round(shot.bounds.x + action.toX)
+            const toY = Math.round(shot.bounds.y + action.toY)
+            options.highlight?.({ x: fromX, y: fromY, label: '视觉拖拽' })
+            await runPowerShell(
+              'desktop-mouse',
+              MOUSE_SCRIPT,
+              mouseArgs('drag', { x: fromX, y: fromY, to_x: toX, to_y: toY }),
+              15_000
+            )
+            await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+            uiCache = null
+            return { output: `视觉操作拖拽 (${fromX}, ${fromY}) → (${toX}, ${toY})` }
+          }
+          if (action.action === 'paste_text') {
+            const encoded = Buffer.from(action.text, 'utf8').toString('base64')
+            await runPowerShell(
+              'desktop-clipboard-text',
+              CLIPBOARD_TEXT_SCRIPT,
+              ['-EncodedText', encoded, '-WaitMs', '600'],
+              15_000
+            )
+            await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+            uiCache = null
+            return { output: `视觉操作粘贴文字（${action.text.length} 字符）` }
           }
           if (action.action === 'paste_file') {
             const encoded = Buffer.from(JSON.stringify(action.paths), 'utf8').toString('base64')
@@ -1113,8 +1221,16 @@ export function createDesktopTools(
             uiCache = null
             return { output: `视觉操作滚动 ${action.amount} 格` }
           }
-          const clicks = action.action === 'double_click' ? 2 : action.clicks ?? 1
-          const button = action.action === 'click' ? action.button ?? 'left' : 'left'
+          let clicks = 1
+          let button: 'left' | 'right' | 'middle' = 'left'
+          if (action.action === 'double_click') {
+            clicks = 2
+          } else if (action.action === 'right_click') {
+            button = 'right'
+          } else {
+            clicks = action.clicks ?? 1
+            button = action.button ?? 'left'
+          }
           const clickX = Math.round(shot.bounds.x + action.x)
           const clickY = Math.round(shot.bounds.y + action.y)
           options.highlight?.({ x: clickX, y: clickY, label: `视觉点击 (${clickX}, ${clickY})` })

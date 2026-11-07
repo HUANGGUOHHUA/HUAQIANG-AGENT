@@ -46,6 +46,21 @@ describe('desktop vision', () => {
     expect(
       parseVisualAction('{"action":"paste_file","path":"D:\\\\tmp\\\\a.zip"}')
     ).toEqual({ action: 'paste_file', paths: ['D:\\tmp\\a.zip'] })
+    expect(parseVisualAction('{"action":"drag","x":1,"y":2,"toX":3,"toY":4}')).toEqual({
+      action: 'drag',
+      x: 1,
+      y: 2,
+      toX: 3,
+      toY: 4
+    })
+    expect(parseVisualAction('{"action":"paste_text","text":"你好"}')).toEqual({
+      action: 'paste_text',
+      text: '你好'
+    })
+    expect(parseVisualAction('{"action":"hotkey","keys":"CTRL+S"}')).toEqual({
+      action: 'press',
+      keys: 'CTRL+S'
+    })
 
     const tools = createDesktopTools(() => null, {
       analyzeImage: async () => '{"action":"done","message":"视觉步骤完成"}'
