@@ -15,6 +15,7 @@ import {
   UI_SCRIPT
 } from './scripts'
 import { SnapshotCache, parseUiItems, type UiSnapshotItem } from './snapshot'
+import type { ScreenBounds } from './visual'
 
 const SCREEN_SETTLE_MS = 300
 const SCREEN_TIMEOUT = 20_000
@@ -22,13 +23,6 @@ const SNAPSHOT_TIMEOUT = 25_000
 const MOUSE_TIMEOUT = 12_000
 const DRAG_TIMEOUT = 15_000
 const KEYBOARD_TIMEOUT = 20_000
-
-export interface ScreenBounds {
-  x: number
-  y: number
-  width: number
-  height: number
-}
 
 export interface ScreenCapture {
   path: string
@@ -82,8 +76,13 @@ export interface ClickOptions {
   height?: number
 }
 
+/** 把任意输入收敛成脚本认识的鼠标按键。 */
+export function normalizeButton(value: unknown): 'left' | 'right' | 'middle' {
+  return value === 'right' || value === 'middle' ? value : 'left'
+}
+
 /** 组鼠标脚本参数，统一裁剪到安全范围。 */
-export function mouseArgs(action: string, args: Record<string, unknown>): string[] {
+function mouseArgs(action: string, args: Record<string, unknown>): string[] {
   return [
     '-Action', action,
     '-X', String(numberArg(args, 'x', 0, -100_000, 100_000)),

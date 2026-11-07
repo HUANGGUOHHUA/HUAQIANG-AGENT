@@ -4,7 +4,7 @@ import { detectEdges } from '../../../attachments/edges'
 import { boolArg, numberArg, stringArg, ToolError, truncate } from '../types'
 import type { ToolDefinition } from '../types'
 import { POST_MOUSE_DELAY_MS, waitFor } from './powershell'
-import { DesktopSession, type DesktopToolOptions } from './session'
+import { DesktopSession, normalizeButton, type DesktopToolOptions } from './session'
 import { pickUiItem, type UiSnapshotItem } from './snapshot'
 import { buildVisualPrompt, parseVisualAction } from './visual'
 
@@ -387,7 +387,7 @@ export function createDesktopTools(
         }
         await session.click(x, y, {
           signal: context.signal,
-          button: stringArg(args, 'button', { fallback: 'left' }) as 'left' | 'right' | 'middle',
+          button: normalizeButton(stringArg(args, 'button', { fallback: 'left' })),
           clicks: numberArg(args, 'clicks', 1, 1, 3),
           durationMs: numberArg(args, 'duration_ms', 320, 80, 1500),
           width: Number(item.width ?? 26),
@@ -455,7 +455,7 @@ export function createDesktopTools(
         const button = stringArg(args, 'button', { fallback: 'left' })
         await session.click(x, y, {
           signal: context.signal,
-          button: button === 'right' || button === 'middle' ? button : 'left',
+          button: normalizeButton(button),
           clicks: numberArg(args, 'clicks', 1, 1, 3),
           durationMs: numberArg(args, 'duration_ms', 320, 80, 1500),
           label: `${button === 'right' ? '右键' : button === 'middle' ? '中键' : '点击'} (${x}, ${y})`

@@ -1,11 +1,15 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { detectEdges } from '../app/src/main/attachments/edges'
 
-const PYTHON = 'D:\\desk\\github_hq\\output\\win-unpacked\\resources\\runtime\\python\\python.exe'
+// 优先用仓库里准备好的运行环境，其次用打包产物，避免测试依赖某次打包状态。
+const PYTHON = [
+  join(process.cwd(), 'runtime', 'python', 'python.exe'),
+  join(process.cwd(), 'output', 'win-unpacked', 'resources', 'runtime', 'python', 'python.exe')
+].find((candidate) => existsSync(candidate)) ?? 'python.exe'
 
 describe('local edge detection', () => {
   it('finds a rectangular control border', async () => {
