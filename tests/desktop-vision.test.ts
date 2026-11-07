@@ -8,7 +8,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { createDesktopTools } from '../app/src/main/agent/tools/desktop'
+import { createDesktopTools, parseVisualAction } from '../app/src/main/agent/tools/desktop'
 
 const context = {
   workspace: 'D:\\desk\\demo',
@@ -31,5 +31,24 @@ describe('desktop vision', () => {
     expect(received!.dataUrl).toMatch(/^data:image\/png;base64,/)
     expect(received!.url).toBe('screen://virtual-desktop')
     expect(result.output).toContain('桌面分析')
+  }, 45_000)
+
+  it('parses a visual action and executes a single generic step', async () => {
+    expect(parseVisualAction('{"action":"click","x":10,"y":20}')).toMatchObject({
+      action: 'click',
+      x: 10,
+      y: 20
+    })
+    expect(parseVisualAction('```json\n{"action":"done","message":"完成"}\n```')).toEqual({
+      action: 'done',
+      message: '完成'
+    })
+
+    const tools = createDesktopTools(() => null, {
+      analyzeImage: async () => '{"action":"done","message":"视觉步骤完成"}'
+    })
+    const tool = tools.find((item) => item.name === 'screen_act')!
+    const result = await tool.execute({ instruction: '打开设置' }, context)
+    expect(result.output).toBe('视觉步骤完成')
   }, 45_000)
 })

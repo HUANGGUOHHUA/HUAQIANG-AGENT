@@ -580,6 +580,69 @@ function mouseArgs(action: string, args: Record<string, unknown>): string[] {
   ]
 }
 
+export type VisualAction =
+  | { action: 'click'; x: number; y: number; clicks?: number; button?: 'left' | 'right' | 'middle' }
+  | { action: 'double_click'; x: number; y: number }
+  | { action: 'type'; text: string }
+  | { action: 'press'; keys: string }
+  | { action: 'scroll'; amount: number; x?: number; y?: number }
+  | { action: 'wait'; ms: number }
+  | { action: 'done'; message?: string }
+
+export function parseVisualAction(raw: string): VisualAction {
+  const match = raw.match(/\{[\s\S]*\}/)
+  if (!match) throw new ToolError('视觉模型没有返回 JSON 动作')
+  let value: Record<string, unknown>
+  try {
+    value = JSON.parse(match[0]) as Record<string, unknown>
+  } catch {
+    throw new ToolError(`视觉动作 JSON 无法解析：${match[0].slice(0, 200)}`)
+  }
+  const action = typeof value.action === 'string' ? value.action.toLowerCase() : ''
+  if (action === 'click' || action === 'double_click') {
+    const x = Number(value.x)
+    const y = Number(value.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new ToolError('click 缺少有效 x/y')
+    if (action === 'double_click') return { action, x: Math.round(x), y: Math.round(y) }
+    const button = value.button === 'right' || value.button === 'middle' ? value.button : 'left'
+    const clicks = Math.max(1, Math.min(3, Math.round(Number(value.clicks ?? 1))))
+    return { action: 'click', x: Math.round(x), y: Math.round(y), clicks, button }
+  }
+  if (action === 'type') {
+    const text = typeof value.text === 'string' ? value.text.slice(0, 4000) : ''
+    if (!text) throw new ToolError('type 缺少 text')
+    return { action, text }
+  }
+  if (action === 'press') {
+    const keys = typeof value.keys === 'string' ? value.keys.slice(0, 200).trim() : ''
+    if (!keys) throw new ToolError('press 缺少 keys')
+    return { action, keys }
+  }
+  if (action === 'scroll') {
+    const amount = Math.round(Number(value.amount))
+    if (!Number.isFinite(amount) || amount === 0) throw new ToolError('scroll 缺少有效 amount')
+    return {
+      action,
+      amount: Math.max(-20, Math.min(20, amount)),
+      x: Number.isFinite(Number(value.x)) ? Math.round(Number(value.x)) : undefined,
+      y: Number.isFinite(Number(value.y)) ? Math.round(Number(value.y)) : undefined
+    }
+  }
+  if (action === 'wait') {
+    return {
+      action,
+      ms: Math.max(0, Math.min(10_000, Math.round(Number(value.ms ?? 500))))
+    }
+  }
+  if (action === 'done') {
+    return {
+      action,
+      message: typeof value.message === 'string' ? value.message.slice(0, 1000) : ''
+    }
+  }
+  throw new ToolError(`不支持的视觉动作：${action || '(empty)'}`)
+}
+
 export interface DesktopToolOptions {
   suspendOverlay?: () => void
   resumeOverlay?: () => void
@@ -595,14 +658,27 @@ export function createDesktopTools(
   getWindow: () => BrowserWindow | null,
   options: DesktopToolOptions = {}
 ): ToolDefinition[] {
-  const captureVirtualScreen = async (): Promise<{
+  const captureVirtualScreen = async (
+    holdApp = false
+  ): Promise<{
     path: string
     bounds: { x: number; y: number; width: number; height: number }
+    restore: () => void
   }> => {
     options.suspendOverlay?.()
     const win = getWindow()
     const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible())
     if (wasVisible) win!.hide()
+    let restored = false
+    const restore = (): void => {
+      if (restored) return
+      restored = true
+      if (wasVisible && win && !win.isDestroyed()) {
+        win.show()
+        win.focus()
+      }
+      options.resumeOverlay?.()
+    }
     try {
       await new Promise((resolve) => setTimeout(resolve, 250))
       const path = join(tmpdir(), `huaqiang-screen-${Date.now()}.png`)
@@ -615,14 +691,11 @@ export function createDesktopTools(
           y: Number.isFinite(y) ? y : 0,
           width: Number.isFinite(width) ? width : 0,
           height: Number.isFinite(height) ? height : 0
-        }
+        },
+        restore
       }
     } finally {
-      if (wasVisible && win && !win.isDestroyed()) {
-        win.show()
-        win.focus()
-      }
-      options.resumeOverlay?.()
+      if (!holdApp) restore()
     }
   }
 
@@ -868,6 +941,117 @@ export function createDesktopTools(
           })
           return { output: text || '（模型没有返回视觉识别结果）' }
         } finally {
+          await unlink(shot.path).catch(() => undefined)
+        }
+      }
+    },
+    {
+      name: 'screen_act',
+      displayName: '视觉操作桌面',
+      risk: 'exec',
+      description:
+        '通用视觉操作：截屏交给当前视觉模型，模型返回一个 JSON 动作（click/double_click/type/press/scroll/wait/done），程序执行该动作。适合没有 UIA/DOM 的 QQ、微信、远程桌面等界面；不需要为每个应用写专用代码。每次只执行一个动作，下一步重新截图。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          instruction: {
+            type: 'string',
+            description: '当前目标，例如“打开 QQ 给张三发送文件”'
+          }
+        },
+        required: ['instruction'],
+        additionalProperties: false
+      },
+      summarize: (args) => `视觉操作桌面：${stringArg(args, 'instruction').slice(0, 60) || '?'}`,
+      execute: async (args, context) => {
+        if (!options.analyzeImage) throw new ToolError('当前没有可用的视觉分析器')
+        const instruction = stringArg(args, 'instruction', { required: true, max: 2000 }).trim()
+        if (!instruction) throw new ToolError('instruction 不能为空')
+        const shot = await captureVirtualScreen(true)
+        try {
+          const bytes = await readFile(shot.path)
+          const raw = await options.analyzeImage(
+            [
+              '你在操作 Windows 桌面。只返回一个 JSON 动作，不要返回解释或 Markdown。',
+              `目标：${instruction}`,
+              '允许的动作：',
+              '{"action":"click","x":123,"y":456}',
+              '{"action":"double_click","x":123,"y":456}',
+              '{"action":"type","text":"要输入的文字"}',
+              '{"action":"press","keys":"ENTER"}',
+              '{"action":"scroll","amount":-3}',
+              '{"action":"wait","ms":500}',
+              '{"action":"done","message":"完成说明"}',
+              `截图坐标范围：x=${shot.bounds.x} y=${shot.bounds.y} width=${shot.bounds.width} height=${shot.bounds.height}`,
+              '坐标必须是截图中的像素坐标。无法确认时返回 {"action":"wait","ms":500}，不要猜。'
+            ].join('\n'),
+            {
+              dataUrl: `data:image/png;base64,${bytes.toString('base64')}`,
+              url: 'screen://visual-action',
+              title: '桌面视觉操作'
+            }
+          )
+          const action = parseVisualAction(raw)
+          if (action.action === 'done') {
+            return { output: action.message || '视觉操作完成' }
+          }
+          if (action.action === 'wait') {
+            await waitFor(action.ms, context.signal)
+            return { output: `视觉操作等待 ${action.ms}ms` }
+          }
+          if (action.action === 'type') {
+            const encoded = Buffer.from(action.text, 'utf8').toString('base64')
+            await runPowerShell(
+              'desktop-keyboard',
+              KEYBOARD_SCRIPT,
+              ['-Action', 'type', '-EncodedText', encoded],
+              20_000
+            )
+            uiCache = null
+            return { output: `视觉操作输入文字（${action.text.length} 字符）` }
+          }
+          if (action.action === 'press') {
+            await runPowerShell(
+              'desktop-keyboard',
+              KEYBOARD_SCRIPT,
+              ['-Action', 'press', '-Keys', action.keys],
+              12_000
+            )
+            uiCache = null
+            return { output: `视觉操作按键 ${action.keys}` }
+          }
+          if (action.action === 'scroll') {
+            const x = Math.round(shot.bounds.x + (action.x ?? shot.bounds.width / 2))
+            const y = Math.round(shot.bounds.y + (action.y ?? shot.bounds.height / 2))
+            options.highlight?.({ x, y, label: `滚轮 ${action.amount > 0 ? '↑' : '↓'}` })
+            await runPowerShell(
+              'desktop-mouse',
+              MOUSE_SCRIPT,
+              mouseArgs('scroll', { amount: action.amount, x, y }),
+              12_000
+            )
+            await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+            uiCache = null
+            return { output: `视觉操作滚动 ${action.amount} 格` }
+          }
+          const clicks = action.action === 'double_click' ? 2 : action.clicks ?? 1
+          const button = action.action === 'click' ? action.button ?? 'left' : 'left'
+          const clickX = Math.round(shot.bounds.x + action.x)
+          const clickY = Math.round(shot.bounds.y + action.y)
+          options.highlight?.({ x: clickX, y: clickY, label: `视觉点击 (${clickX}, ${clickY})` })
+          await runPowerShell(
+            'desktop-mouse',
+            MOUSE_SCRIPT,
+            mouseArgs('click', { x: clickX, y: clickY, clicks, button }),
+            12_000
+          )
+          await waitFor(POST_MOUSE_DELAY_MS, context.signal)
+          uiCache = null
+          return {
+            output: `视觉操作点击 (${clickX}, ${clickY})${clicks > 1 ? ` ×${clicks}` : ''}`
+          }
+        } finally {
+          shot.restore()
           await unlink(shot.path).catch(() => undefined)
         }
       }
