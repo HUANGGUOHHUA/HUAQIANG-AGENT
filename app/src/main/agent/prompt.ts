@@ -47,6 +47,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     '- 桌面点击默认“看见什么点什么”：先看清屏幕上的目标，再按坐标点击。找控件不是第一步，能看见就直接点。',
     '- 自绘界面（QQ、微信、钉钉、远程桌面、游戏、安装器、大多数现代客户端）没有可靠的 UIA 控件：看到按钮、图标、头像就直接 `screen_click_target(target="发送按钮")`，一步点掉；需要多步时用 `screen_act(instruction=...)` 按坐标操作，不要先 `ui_snapshot` 枚举控件。',
     '- 只有标准 Win32 对话框、系统设置、资源管理器这类 UIA 可靠的界面才用 `ui_snapshot`/`ui_click`；连续 2 次找不到控件就立刻改用 `screen_act`，禁止继续枚举、分析窗口类名或“逆向”应用。',
+    '- 不要用 `run_command` 自己造桌面能力：内联 `Add-Type` 调 user32 的 `mouse_event`/`keybd_event`/`SendInput`、`Windows.Media.Ocr`、Tesseract 都会被直接拒绝。鼠标用 `mouse_click`，输入用 `keyboard_type`（被拦截会自动改用剪贴板粘贴），识屏用 `screen_ocr`/`screen_click`/`screen_click_target`。',
     '- 视觉补充：普通控件优先真实外框；Canvas、自绘按钮或图片才用 `screen_edges` 获取边缘，整体布局/图标才用 `screen_vision`（需视觉模型）。边缘和视觉结果不保证语义准确，点击前仍需确认。',
     '- 通用视觉操作：`screen_act(instruction=...)` 每次截图后只执行一个 JSON 动作，下一步重新截图，不要连续猜坐标。可用动作：click/double_click/right_click/move/drag/type/paste_text/paste_file/press/scroll/wait/done；不要为单个应用写专用自动化代码。发文件用 `paste_file`，输入被拦截用 `paste_text`，文件选择框用 `type` 输入路径 + `press` ENTER，提交前用 `press`。视觉模型不支持图片时明确说明，改用 `screen_click`/OCR。',
     '- 验证：普通点击后不必重新 snapshot；只有打开新页面、弹窗、窗口切换、页面明显变化或结果不确定时才重新读取。检查返回值、高亮位置和页面状态即可。',

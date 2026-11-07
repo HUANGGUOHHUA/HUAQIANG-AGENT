@@ -234,8 +234,13 @@ export function createDesktopTools(
             return { output: `视觉操作粘贴文件：${action.paths.join('、')}` }
           }
           if (action.action === 'type') {
-            await session.typeText(action.text)
-            return { output: `视觉操作输入文字（${action.text.length} 字符）` }
+            const mode = await session.typeText(action.text)
+            return {
+              output:
+                mode === 'clipboard'
+                  ? `键盘输入被拦截，已用剪贴板粘贴（${action.text.length} 字符）`
+                  : `视觉操作输入文字（${action.text.length} 字符）`
+            }
           }
           if (action.action === 'press') {
             await session.pressKeys(action.keys)
@@ -636,8 +641,13 @@ export function createDesktopTools(
       execute: async (args) => {
         const text = stringArg(args, 'text', { required: true, max: 4_000 })
         if (!text) throw new ToolError('text 不能为空')
-        await session.typeText(text)
-        return { output: `已输入 ${text.length} 个字符` }
+        const mode = await session.typeText(text)
+        return {
+          output:
+            mode === 'clipboard'
+              ? `键盘输入被安全软件拦截，已用剪贴板粘贴 ${text.length} 个字符`
+              : `已输入 ${text.length} 个字符`
+        }
       }
     },
     {

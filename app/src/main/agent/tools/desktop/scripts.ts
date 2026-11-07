@@ -325,7 +325,21 @@ public static class HqKeyboard
 if ($Action -eq 'type') {
   $text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedText))
   if ([string]::IsNullOrEmpty($text)) { throw 'text is empty' }
-  [HqKeyboard]::TypeText($text)
+  try {
+    [HqKeyboard]::TypeText($text)
+    Write-Output 'sendinput'
+  } catch {
+    # 安全软件常拦截 SendInput；SendKeys 走另一条通道，通常仍可用。
+    $oldText = ''
+    try { $oldText = [System.Windows.Forms.Clipboard]::GetText() } catch { }
+    [System.Windows.Forms.Clipboard]::SetText($text)
+    Start-Sleep -Milliseconds 150
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+    Start-Sleep -Milliseconds 320
+    try { if ($oldText) { [System.Windows.Forms.Clipboard]::SetText($oldText) } } catch { }
+    Write-Output 'clipboard'
+  }
+  exit 0
 } elseif ($Action -eq 'press') {
   $raw = $Keys.Trim()
   if ([string]::IsNullOrWhiteSpace($raw)) { throw 'keys is empty' }

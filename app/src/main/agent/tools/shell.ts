@@ -8,6 +8,32 @@ import { ToolError, numberArg, stringArg, stripAnsi, truncate } from './types'
 
 const MAX_OUTPUT = 200_000
 
+// 用脚本重造鼠标/键盘输入或 OCR 的迹象。桌面自动化应走专用工具：
+// 这些内联脚本会卡住、超时，而且和接管高亮/审批脱节。
+const SYNTHETIC_INPUT_RE = /(\bmouse_event\b|\bkeybd_event\b|\bSendInput\b|\bSetCursorPos\b|\bBlockInput\b)/i
+const SCRIPT_OCR_RE = /(Windows\.Media\.Ocr|\bOcrEngine\b|\btesseract\b|osd\.traineddata)/i
+
+/** 命令是否在“重造”桌面自动化能力；返回给模型的纠正提示。 */
+export function desktopAutomationHint(command: string): string | null {
+  if (SYNTHETIC_INPUT_RE.test(command)) {
+    return (
+      '不要用 run_command 里的 Win32 调用模拟鼠标或键盘（mouse_event / keybd_event / SendInput）。' +
+      '直接用 mouse_move、mouse_click、mouse_drag、keyboard_type、keyboard_press；' +
+      'keyboard_type 在 SendInput 被拦截时会自动改用剪贴板粘贴。' +
+      '如果是用户明确要求编写这类程序，请先用 write_file 保存脚本，再运行该文件。'
+    )
+  }
+  if (SCRIPT_OCR_RE.test(command)) {
+    return (
+      '不要用 run_command 自己调用 OCR 引擎（Windows.Media.Ocr / Tesseract）。' +
+      '直接用 screen_ocr（可传 region_x/y/width/height 只识别目标区域）、screen_click(text=...)，' +
+      '或者 screen_click_target(target=...) 按描述点击。' +
+      '如果是用户明确要求编写 OCR 脚本，请先用 write_file 保存，再运行该文件。'
+    )
+  }
+  return null
+}
+
 function powershellPath(): string {
   const systemRoot = process.env.SystemRoot || 'C:\\Windows'
   const full = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
@@ -54,6 +80,8 @@ export const runCommandTool: ToolDefinition = {
   execute: async (args, context) => {
     const command = stringArg(args, 'command', { required: true, max: 20_000 })
     if (!command.trim()) throw new ToolError('命令不能为空')
+    const hint = desktopAutomationHint(command)
+    if (hint) throw new ToolError(hint)
     const cwd = await resolveWithinRoot(context.workspace, stringArg(args, 'cwd', { fallback: '.' }) || '.')
     const timeout = numberArg(args, 'timeout_ms', 120_000, 1_000, 600_000)
 

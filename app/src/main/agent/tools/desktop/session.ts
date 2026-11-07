@@ -310,15 +310,17 @@ export class DesktopSession {
     this.invalidate()
   }
 
-  async typeText(text: string): Promise<void> {
+  /** 输入文字；SendInput 被安全软件拦截时脚本会自动改用剪贴板粘贴。 */
+  async typeText(text: string): Promise<'sendinput' | 'clipboard'> {
     const encoded = Buffer.from(text, 'utf8').toString('base64')
-    await runPowerShell(
+    const mode = await runPowerShell(
       'desktop-keyboard',
       KEYBOARD_SCRIPT,
       ['-Action', 'type', '-EncodedText', encoded],
       KEYBOARD_TIMEOUT
     )
     this.invalidate()
+    return mode === 'clipboard' ? 'clipboard' : 'sendinput'
   }
 
   async pressKeys(keys: string): Promise<void> {
