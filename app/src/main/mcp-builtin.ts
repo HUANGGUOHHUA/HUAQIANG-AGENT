@@ -21,11 +21,6 @@ interface BuiltinMcpOptions {
   version: string
 }
 
-interface BuiltinCallResult {
-  content: Array<{ type: 'text'; text: string }>
-  isError?: boolean
-}
-
 function result(text: string, isError = false): CallToolResult {
   return {
     content: [{ type: 'text', text: text.slice(0, 300_000) }],

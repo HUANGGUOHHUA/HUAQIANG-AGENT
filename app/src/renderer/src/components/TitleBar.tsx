@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Maximize2, Minimize2, Minus, X, ZoomIn, ZoomOut } from 'lucide-react'
 import emblem from '../assets/emblem.png'
 

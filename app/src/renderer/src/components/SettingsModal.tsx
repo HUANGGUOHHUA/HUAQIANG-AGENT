@@ -35,7 +35,7 @@ import type {
 } from '../../../shared/types'
 import logo from '../assets/logo.png'
 import emblem from '../assets/emblem.png'
-import { cn, parseJson, stripIpcError, uid } from '../lib/utils'
+import { cn, stripIpcError, uid } from '../lib/utils'
 
 export type SettingsTab = 'model' | 'mcp' | 'workspace' | 'about'
 

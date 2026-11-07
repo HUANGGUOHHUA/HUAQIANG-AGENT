@@ -1,5 +1,5 @@
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import fg from 'fast-glob'
 import { displayPath, resolveWithinRoot } from '../../security/paths'
 import type { ToolDefinition, ToolResult } from './types'

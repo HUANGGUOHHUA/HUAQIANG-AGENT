@@ -7,8 +7,7 @@ import {
   Globe2,
   Plug,
   ShieldQuestion,
-  Terminal,
-  Trash2
+  Terminal
 } from 'lucide-react'
 import type { ApprovalDecision, ApprovalRequest, ToolRisk } from '../../../shared/types'
 import { cn, parseJson, stringValue } from '../lib/utils'

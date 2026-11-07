@@ -884,7 +884,7 @@ export default function BrowserPane(): React.JSX.Element {
     setElementValue(el, value)
     matched.push({ key, ...elementInfo(el) })
   }
-  if (submit) {
+  if (${submit ? 'true' : 'false'}) {
     const form = all.find((el) => el.form)?.form
     if (form) {
       if (form.requestSubmit) form.requestSubmit()
