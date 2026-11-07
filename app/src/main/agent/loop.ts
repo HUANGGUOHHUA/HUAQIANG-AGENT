@@ -15,6 +15,7 @@ import type {
 import { streamModel } from './providers'
 import { degradeImageAttachments } from './vision'
 import type { ProviderConfig, ProviderTool } from './providers/types'
+import { DESKTOP_TOOL_NAMES } from './tools/desktop'
 import type { ToolDefinition } from './tools/types'
 
 // Security software (Huorong/Defender controlled-folder access) can deny writes
@@ -58,18 +59,7 @@ const CONTEXT_SAFETY_TOKENS = 2_048
 const MAX_TOOL_RESULT_CHARS = 30_000
 // One approval unlocks this desktop-control set for the current run. The user
 // must still be able to abort it with ESC at any time.
-const DESKTOP_TOOLS = new Set([
-  'ui_snapshot',
-  'screen_ocr',
-  'screen_act',
-  'ui_click',
-  'mouse_move',
-  'mouse_click',
-  'mouse_drag',
-  'mouse_scroll',
-  'keyboard_type',
-  'keyboard_press'
-])
+const DESKTOP_TOOLS = new Set<string>(DESKTOP_TOOL_NAMES)
 
 function estimateTokens(text: string): number {
   if (!text) return 0

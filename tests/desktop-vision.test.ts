@@ -8,7 +8,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { createDesktopTools, parseVisualAction } from '../app/src/main/agent/tools/desktop'
+import { DESKTOP_TOOL_NAMES, createDesktopTools, parseVisualAction } from '../app/src/main/agent/tools/desktop'
 
 const context = {
   workspace: 'D:\\desk\\demo',
@@ -69,4 +69,11 @@ describe('desktop vision', () => {
     const result = await tool.execute({ instruction: '打开设置' }, context)
     expect(result.output).toBe('视觉步骤完成')
   }, 45_000)
+
+  it('gates every desktop tool behind the takeover approval', () => {
+    const gated = new Set<string>(DESKTOP_TOOL_NAMES)
+    const tools = createDesktopTools(() => null, {})
+    expect(tools.length).toBeGreaterThan(0)
+    expect(tools.map((tool) => tool.name).filter((name) => !gated.has(name))).toEqual([])
+  })
 })
