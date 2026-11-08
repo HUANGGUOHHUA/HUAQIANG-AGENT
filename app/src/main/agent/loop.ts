@@ -339,6 +339,8 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
   const stepLimit = options.maxSteps > 0 ? options.maxSteps : Number.POSITIVE_INFINITY
   let desktopControlApproved = false
   let desktopControlDenied = false
+  // 同一次运行里同样的调用重复太多次，说明模型在原地打转。
+  const repeatCounts = new Map<string, number>()
   for (let step = 0; step < stepLimit; step++) {
     if (signal.aborted) return finishAborted()
 
@@ -578,9 +580,31 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
         continue
       }
 
+      const signature = `${call.name}:${JSON.stringify(call.args ?? {})}`
+      const seen = (repeatCounts.get(signature) ?? 0) + 1
+      repeatCounts.set(signature, seen)
+      if (seen > 2) {
+        // 第三次同样的调用直接拒绝：同样的输入不会得到不同的结果。
+        call.status = 'error'
+        call.isError = true
+        call.result =
+          `同一操作已经执行 ${seen - 1} 次，结果没有变化。请换一种做法：` +
+          '用 screen_click_target 按描述点击、直接汇报当前结果，或说明卡在哪里；不要重复同样的调用。'
+        call.endedAt = Date.now()
+        emit({
+          type: 'tool-end',
+          runId,
+          messageId,
+          callId: call.id,
+          status: 'error',
+          result: call.result,
+          isError: true
+        })
+        continue
+      }
+
       const isDesktopTool = DESKTOP_TOOLS.has(definition.name)
-      if (isDesktopTool && desktopControlDenied) {
-        call.status = 'denied'
+      if (isDesktopTool && desktopControlDenied) {        call.status = 'denied'
         call.isError = true
         call.result = '用户已拒绝屏幕接管。本次任务不再尝试桌面操作。'
         call.endedAt = Date.now()

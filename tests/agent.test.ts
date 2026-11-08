@@ -615,3 +615,58 @@ describe('workspace safety and shell', () => {
     expect(result.output).toContain('华强职校')
   })
 })
+
+describe('repeat guard', () => {
+  it('refuses a third identical tool call instead of looping', async () => {
+    const workspace = await makeWorkspace()
+    const listSse =
+      sse({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_same',
+                  type: 'function',
+                  function: { name: 'list_files', arguments: '{"path":"."}' }
+                }
+              ]
+            }
+          }
+        ]
+      }) +
+      sse({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }) +
+      'data: [DONE]\n\n'
+    const mock = await startMock((_body, index) => (index < 4 ? listSse : finalSse('已停止重复操作。')))
+    const events: AgentEvent[] = []
+    const result = await runAgent({
+      runId: 'run-repeat',
+      sessionId: 'session-repeat',
+      workspace,
+      provider: {
+        provider: 'openai',
+        baseUrl: mock.url,
+        model: 'mock-model',
+        apiKey: 'test-key',
+        temperature: 0.2,
+        maxTokens: 1024
+      },
+      approvalMode: 'auto',
+      maxSteps: 6,
+      systemPrompt: '你是测试助手',
+      messages: [userMessage],
+      tools: createFileTools(),
+      signal: new AbortController().signal,
+      emit: (event) => events.push(event),
+      requestApproval: async () => 'allow'
+    })
+
+    const toolEnds = events.filter((event) => event.type === 'tool-end')
+    const rejected = toolEnds.filter(
+      (event) => event.type === 'tool-end' && String(event.result).includes('同一操作已经执行')
+    )
+    expect(result.ok).toBe(true)
+    expect(rejected.length).toBeGreaterThan(0)
+  })
+})

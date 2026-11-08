@@ -196,25 +196,50 @@ export class DesktopSession {
     private readonly options: DesktopToolOptions
   ) {}
 
-  async capture(holdApp = false, withForeground = false): Promise<ScreenCapture> {
-    this.options.suspendOverlay?.()
+  /**
+   * 把自己藏起来，避免挡住目标窗口或抢走焦点。
+   * 返回的恢复函数用 showInactive 显示窗口，不会重新抢焦点。
+   */
+  private async hideApp(suspendOverlay: boolean): Promise<() => void> {
+    if (suspendOverlay) this.options.suspendOverlay?.()
     const win = this.getWindow()
     const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible())
     if (wasVisible) win!.hide()
     let restored = false
-    const restore = (): void => {
+    return () => {
       if (restored) return
       restored = true
-      if (wasVisible && win && !win.isDestroyed()) {
-        win.show()
-        win.focus()
-      }
-      this.options.resumeOverlay?.()
+      if (wasVisible && win && !win.isDestroyed()) win.showInactive()
+      if (suspendOverlay) this.options.resumeOverlay?.()
     }
+  }
+
+  private isOwnWindow(win: { title: string }): boolean {
+    return win.title.includes('华强以太')
+  }
+
+  /** 输入动作期间保持自己的窗口隐藏，避免点击或按键打到本程序上。 */
+  private async whileHidden<T>(run: () => Promise<T>): Promise<T> {
+    const restore = await this.hideApp(false)
+    try {
+      return await run()
+    } finally {
+      restore()
+    }
+  }
+
+  async capture(holdApp = false, withForeground = false): Promise<ScreenCapture> {
+    const restore = await this.hideApp(true)
     try {
       await new Promise((resolve) => setTimeout(resolve, SCREEN_SETTLE_MS))
       // 隐藏自己的窗口后，前台就是用户真正在用的那个程序。
-      const foreground = withForeground ? await this.foregroundWindow().catch(() => null) : null
+      let foreground = withForeground ? await this.foregroundWindow().catch(() => null) : null
+      if (withForeground && (!foreground || this.isOwnWindow(foreground))) {
+        // 刚隐藏时系统可能还没来得及切换前台，稍等再读一次。
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        foreground = await this.foregroundWindow().catch(() => null)
+        if (foreground && this.isOwnWindow(foreground)) foreground = null
+      }
       const path = join(tmpdir(), `huaqiang-screen-${Date.now()}.png`)
       const raw = await runPowerShell('desktop-screen', SCREEN_SCRIPT, ['-Path', path], SCREEN_TIMEOUT)
       return { path, bounds: parseBounds(raw), foreground, restore }
@@ -280,7 +305,8 @@ export class DesktopSession {
 
   /** 在当前前台窗口里找文字并点击中心；找不到时给出相近文字和坐标。 */
   async clickText(text: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
-    const shot = await this.capture(false, true)
+    // 必须保持自己的窗口隐藏：截图后立刻恢复会挡住目标，点击就会打到本程序。
+    const shot = await this.capture(true, true)
     try {
       const ocr = await this.ocr(shot.path, { useRapid: true })
       const absolute = ocr.lines.map((line) => ({
@@ -316,15 +342,18 @@ export class DesktopSession {
       const x = Math.round(line.x + line.width / 2)
       const y = Math.round(line.y + line.height / 2)
       this.options.highlight?.({ x, y, width: line.width, height: line.height, label: line.text })
-      await runPowerShell(
-        'desktop-mouse',
-        MOUSE_SCRIPT,
-        mouseArgs('click', { ...args, x, y }),
-        MOUSE_TIMEOUT
+      await this.whileHidden(() =>
+        runPowerShell(
+          'desktop-mouse',
+          MOUSE_SCRIPT,
+          mouseArgs('click', { ...args, x, y }),
+          MOUSE_TIMEOUT
+        )
       )
       await waitFor(POST_MOUSE_DELAY_MS, signal)
       return `已通过屏幕文字点击「${line.text}」中心 (${x}, ${y})`
     } finally {
+      shot.restore()
       await unlink(shot.path).catch(() => undefined)
     }
   }
@@ -339,22 +368,26 @@ export class DesktopSession {
       height: options.height,
       label: options.label ?? `点击 (${x}, ${y})`
     })
-    await runPowerShell(
-      'desktop-mouse',
-      MOUSE_SCRIPT,
-      mouseArgs('click', { x, y, button, clicks, duration_ms: options.durationMs }),
-      MOUSE_TIMEOUT
+    await this.whileHidden(() =>
+      runPowerShell(
+        'desktop-mouse',
+        MOUSE_SCRIPT,
+        mouseArgs('click', { x, y, button, clicks, duration_ms: options.durationMs }),
+        MOUSE_TIMEOUT
+      )
     )
     await waitFor(POST_MOUSE_DELAY_MS, options.signal)
   }
 
   async move(x: number, y: number, options: { signal: AbortSignal; durationMs?: number }): Promise<void> {
     this.options.highlight?.({ x, y, label: '鼠标移动' })
-    await runPowerShell(
-      'desktop-mouse',
-      MOUSE_SCRIPT,
-      mouseArgs('move', { x, y, duration_ms: options.durationMs }),
-      MOUSE_TIMEOUT
+    await this.whileHidden(() =>
+      runPowerShell(
+        'desktop-mouse',
+        MOUSE_SCRIPT,
+        mouseArgs('move', { x, y, duration_ms: options.durationMs }),
+        MOUSE_TIMEOUT
+      )
     )
     await waitFor(POST_MOUSE_DELAY_MS, options.signal)
   }
@@ -367,11 +400,13 @@ export class DesktopSession {
     options: { signal: AbortSignal; durationMs?: number; label?: string }
   ): Promise<void> {
     this.options.highlight?.({ x, y, label: options.label ?? '拖拽起点' })
-    await runPowerShell(
-      'desktop-mouse',
-      MOUSE_SCRIPT,
-      mouseArgs('drag', { x, y, to_x: toX, to_y: toY, duration_ms: options.durationMs }),
-      DRAG_TIMEOUT
+    await this.whileHidden(() =>
+      runPowerShell(
+        'desktop-mouse',
+        MOUSE_SCRIPT,
+        mouseArgs('drag', { x, y, to_x: toX, to_y: toY, duration_ms: options.durationMs }),
+        DRAG_TIMEOUT
+      )
     )
     await waitFor(POST_MOUSE_DELAY_MS, options.signal)
   }
@@ -384,11 +419,13 @@ export class DesktopSession {
         label: `滚轮 ${amount > 0 ? '↑' : '↓'} ${Math.abs(amount)}`
       })
     }
-    await runPowerShell(
-      'desktop-mouse',
-      MOUSE_SCRIPT,
-      mouseArgs('scroll', { amount, x: point?.x, y: point?.y }),
-      MOUSE_TIMEOUT
+    await this.whileHidden(() =>
+      runPowerShell(
+        'desktop-mouse',
+        MOUSE_SCRIPT,
+        mouseArgs('scroll', { amount, x: point?.x, y: point?.y }),
+        MOUSE_TIMEOUT
+      )
     )
     if (signal) await waitFor(POST_MOUSE_DELAY_MS, signal)
   }
@@ -396,41 +433,49 @@ export class DesktopSession {
   /** 输入文字；SendInput 被安全软件拦截时脚本会自动改用剪贴板粘贴。 */
   async typeText(text: string): Promise<'sendinput' | 'clipboard'> {
     const encoded = Buffer.from(text, 'utf8').toString('base64')
-    const mode = await runPowerShell(
-      'desktop-keyboard',
-      KEYBOARD_SCRIPT,
-      ['-Action', 'type', '-EncodedText', encoded],
-      KEYBOARD_TIMEOUT
+    const mode = await this.whileHidden(() =>
+      runPowerShell(
+        'desktop-keyboard',
+        KEYBOARD_SCRIPT,
+        ['-Action', 'type', '-EncodedText', encoded],
+        KEYBOARD_TIMEOUT
+      )
     )
     return mode === 'clipboard' ? 'clipboard' : 'sendinput'
   }
 
   async pressKeys(keys: string): Promise<void> {
-    await runPowerShell(
-      'desktop-keyboard',
-      KEYBOARD_SCRIPT,
-      ['-Action', 'press', '-Keys', keys],
-      MOUSE_TIMEOUT
+    await this.whileHidden(() =>
+      runPowerShell(
+        'desktop-keyboard',
+        KEYBOARD_SCRIPT,
+        ['-Action', 'press', '-Keys', keys],
+        MOUSE_TIMEOUT
+      )
     )
   }
 
   async pasteText(text: string): Promise<void> {
     const encoded = Buffer.from(text, 'utf8').toString('base64')
-    await runPowerShell(
-      'desktop-clipboard-text',
-      CLIPBOARD_TEXT_SCRIPT,
-      ['-EncodedText', encoded, '-WaitMs', '600'],
-      DRAG_TIMEOUT
+    await this.whileHidden(() =>
+      runPowerShell(
+        'desktop-clipboard-text',
+        CLIPBOARD_TEXT_SCRIPT,
+        ['-EncodedText', encoded, '-WaitMs', '600'],
+        DRAG_TIMEOUT
+      )
     )
   }
 
   async pasteFiles(paths: string[]): Promise<void> {
     const encoded = Buffer.from(JSON.stringify(paths), 'utf8').toString('base64')
-    await runPowerShell(
-      'desktop-clipboard',
-      CLIPBOARD_PASTE_SCRIPT,
-      ['-EncodedPaths', encoded, '-WaitMs', '900'],
-      20_000
+    await this.whileHidden(() =>
+      runPowerShell(
+        'desktop-clipboard',
+        CLIPBOARD_PASTE_SCRIPT,
+        ['-EncodedPaths', encoded, '-WaitMs', '900'],
+        20_000
+      )
     )
   }
 }

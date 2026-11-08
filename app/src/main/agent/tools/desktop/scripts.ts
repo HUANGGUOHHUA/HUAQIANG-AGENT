@@ -460,6 +460,8 @@ public static class HqFocus
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr h, bool altTab);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
@@ -471,13 +473,13 @@ $proc = Get-Process -ErrorAction SilentlyContinue |
 if (-not $proc) { Write-Output 'notfound'; exit 0 }
 $h = $proc.MainWindowHandle
 [void][HqFocus]::ShowWindow($h, 9)
+[void][HqFocus]::BringWindowToTop($h)
 [void][HqFocus]::SetForegroundWindow($h)
 Start-Sleep -Milliseconds 250
 if ([HqFocus]::GetForegroundWindow() -ne $h) {
-    # 前台切换可能被系统拒绝，退化成还原窗口再试一次。
-    [void][HqFocus]::ShowWindow($h, 5)
-    [void][HqFocus]::SetForegroundWindow($h)
-    Start-Sleep -Milliseconds 200
+    # 前台切换可能被系统拒绝；SwitchToThisWindow 是少数仍可用的兜底。
+    [HqFocus]::SwitchToThisWindow($h, $true)
+    Start-Sleep -Milliseconds 300
 }
 $rect = New-Object HqFocus+RECT
 [void][HqFocus]::GetWindowRect($h, [ref]$rect)

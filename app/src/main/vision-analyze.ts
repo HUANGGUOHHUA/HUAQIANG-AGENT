@@ -53,7 +53,10 @@ async function analyze(question: string, shot: Shot, system: string[]): Promise<
       },
       { onText: () => undefined, onReasoning: () => undefined }
     )
-    return result.text.trim()
+    // 有些小模型把看图结论写在 reasoning 里，content 为空；这时用 reasoning 兜底，
+    // 否则视觉工具会一直返回“模型没有返回结果”。
+    const text = result.text.trim()
+    return text || result.reasoning.trim()
   } finally {
     clearTimeout(timer)
   }
