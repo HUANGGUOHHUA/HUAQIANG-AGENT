@@ -307,13 +307,30 @@ export function createDesktopTools(
         const target = stringArg(args, 'target', { required: true, max: 300 }).trim()
         if (!target) throw new ToolError('target 不能为空')
         const shot = await session.capture(true, true)
+        let cropPath: string | null = null
         try {
-          const bytes = await readFile(shot.path)
-          const raw = await options.analyzeImage(buildVisualPrompt(`点击「${target}」`, shot.bounds), {
-            dataUrl: `data:image/png;base64,${bytes.toString('base64')}`,
-            url: 'screen://click-target',
-            title: '按描述点击'
-          })
+          const foreground = shot.foreground
+          // 只把前台窗口这块图交给视觉模型：图片小、目标唯一，坐标也更准。
+          const imageBounds = foreground
+            ? {
+                x: 0,
+                y: 0,
+                width: Math.min(foreground.width, shot.bounds.width),
+                height: Math.min(foreground.height, shot.bounds.height)
+              }
+            : shot.bounds
+          const imagePath = foreground
+            ? (cropPath = await session.cropWindow(shot.path, shot.bounds, foreground))
+            : shot.path
+          const bytes = await readFile(imagePath)
+          const raw = await options.analyzeImage(
+            buildVisualPrompt(`点击「${target}」`, imageBounds),
+            {
+              dataUrl: `data:image/png;base64,${bytes.toString('base64')}`,
+              url: 'screen://click-target',
+              title: '按描述点击'
+            }
+          )
           const action = parseVisualAction(raw)
           if (action.action === 'done') {
             return {
@@ -329,23 +346,19 @@ export function createDesktopTools(
               `视觉模型返回了 ${action.action}，没有给出点击坐标；请重试一次，或改用 screen_act`
             )
           }
-          const x = Math.round(shot.bounds.x + action.x)
-          const y = Math.round(shot.bounds.y + action.y)
-          // 模型常把坐标估到别的窗口上；不在前台窗口内就不点，避免点错应用。
-          const foreground = shot.foreground
           if (
-            foreground &&
-            (x < foreground.x ||
-              x > foreground.x + foreground.width ||
-              y < foreground.y ||
-              y > foreground.y + foreground.height)
+            action.x < 0 ||
+            action.x > imageBounds.width ||
+            action.y < 0 ||
+            action.y > imageBounds.height
           ) {
             throw new ToolError(
-              `视觉模型给出的坐标 (${x}, ${y}) 不在前台窗口「${foreground.title}」内` +
-                `（${foreground.x},${foreground.y} ${foreground.width}x${foreground.height}）。` +
-                '没有点击。请重新确认目标位置，或先用 window_focus 切到正确的窗口。'
+              `视觉模型给出的坐标 (${action.x}, ${action.y}) 超出画面范围 ` +
+                `（${imageBounds.width}x${imageBounds.height}）。没有点击，请重试。`
             )
           }
+          const x = Math.round((foreground ? foreground.x : shot.bounds.x) + action.x)
+          const y = Math.round((foreground ? foreground.y : shot.bounds.y) + action.y)
           const clicks =
             action.action === 'double_click' ? 2 : numberArg(args, 'clicks', 1, 1, 3)
           const button =
@@ -362,6 +375,7 @@ export function createDesktopTools(
         } finally {
           shot.restore()
           await unlink(shot.path).catch(() => undefined)
+          if (cropPath) await unlink(cropPath).catch(() => undefined)
         }
       }
     },

@@ -208,7 +208,8 @@ function approvalPreview(args: Record<string, unknown>): string {
   return JSON.stringify(preview, null, 2).slice(0, 12_000)
 }
 
-function parseArguments(raw: string): { args: Record<string, unknown>; error?: string } {  if (!raw.trim()) return { args: {} }
+function parseArguments(raw: string): { args: Record<string, unknown>; error?: string } {
+  if (!raw.trim()) return { args: {} }
   try {
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -710,6 +711,8 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
         call.isError = Boolean(toolResult.isError)
         call.stats = toolResult.stats
         call.status = toolResult.isError ? 'error' : 'ok'
+        // 切了窗口，界面状态已经变了，之前的重复计数不再适用。
+        if (call.name === 'window_focus' && !call.isError) repeatCounts.clear()
       } catch (error) {
         if (signal.aborted) {
           call.status = 'cancelled'

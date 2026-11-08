@@ -9,6 +9,7 @@ import { POST_MOUSE_DELAY_MS, runPowerShell, waitFor } from './powershell'
 import {
   CLIPBOARD_PASTE_SCRIPT,
   CLIPBOARD_TEXT_SCRIPT,
+  CROP_SCRIPT,
   FOREGROUND_SCRIPT,
   KEYBOARD_SCRIPT,
   MOUSE_SCRIPT,
@@ -265,6 +266,32 @@ export class DesktopSession {
   async foregroundWindow(): Promise<WindowBounds | null> {
     const raw = await runPowerShell('desktop-foreground', FOREGROUND_SCRIPT, [], 8_000)
     return raw && raw !== 'none' ? parseWindowLine(raw) : null
+  }
+
+  /**
+   * 从整屏截图里裁出目标窗口，只把这块图交给视觉模型。
+   * 模型在窗口图里的坐标就是窗口内坐标，加回原点即可。
+   */
+  async cropWindow(source: string, screen: ScreenBounds, win: WindowBounds): Promise<string> {
+    const x = Math.max(0, win.x - screen.x)
+    const y = Math.max(0, win.y - screen.y)
+    const width = Math.min(win.width, screen.width - x)
+    const height = Math.min(win.height, screen.height - y)
+    const target = join(tmpdir(), `huaqiang-crop-${Date.now()}.png`)
+    await runPowerShell(
+      'desktop-crop',
+      CROP_SCRIPT,
+      [
+        '-Source', source,
+        '-Target', target,
+        '-X', String(x),
+        '-Y', String(y),
+        '-Width', String(Math.max(1, width)),
+        '-Height', String(Math.max(1, height))
+      ],
+      15_000
+    )
+    return target
   }
 
   /** 按标题包含匹配把窗口切到前台，返回它切换后的矩形。 */

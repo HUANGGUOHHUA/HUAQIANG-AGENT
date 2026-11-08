@@ -487,3 +487,30 @@ $width = $rect.Right - $rect.Left
 $height = $rect.Bottom - $rect.Top
 Write-Output ("{0}|{1},{2},{3},{4}" -f $proc.MainWindowTitle, $rect.Left, $rect.Top, $width, $height)
 `
+
+// 把截图裁剪到指定矩形，用于只把目标窗口交给视觉模型。
+export const CROP_SCRIPT = String.raw`param(
+  [string]$Source,
+  [string]$Target,
+  [int]$X,
+  [int]$Y,
+  [int]$Width,
+  [int]$Height
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$img = [System.Drawing.Image]::FromFile($Source)
+try {
+    $bmp = New-Object System.Drawing.Bitmap $Width, $Height
+    try {
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        try {
+            $dest = New-Object System.Drawing.Rectangle 0, 0, $Width, $Height
+            $src = New-Object System.Drawing.Rectangle $X, $Y, $Width, $Height
+            $g.DrawImage($img, $dest, $src, [System.Drawing.GraphicsUnit]::Pixel)
+        } finally { $g.Dispose() }
+        $bmp.Save($Target, [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $bmp.Dispose() }
+} finally { $img.Dispose() }
+Write-Output 'ok'
+`
