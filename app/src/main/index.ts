@@ -1,5 +1,5 @@
 import { app, dialog, protocol } from 'electron'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { bootstrap } from './bootstrap'
 import {
@@ -59,12 +59,48 @@ function acquireSingleInstanceLock(): boolean {
   return false
 }
 
+function instanceMarker(): string {
+  return join(app.getPath('userData'), '.instance.json')
+}
+
+/** 记录当前实例的启动时间，供“已在运行”提示判断是不是旧窗口。 */
+function writeInstanceMarker(): void {
+  try {
+    writeFileSync(
+      instanceMarker(),
+      JSON.stringify({ pid: process.pid, startedAt: Date.now(), version: app.getVersion() })
+    )
+  } catch {
+    // 标记只用于提示，写失败不影响启动。
+  }
+}
+
+function readInstanceMarker(): { startedAt?: number; version?: string } | null {
+  try {
+    return JSON.parse(readFileSync(instanceMarker(), 'utf8')) as {
+      startedAt?: number
+      version?: string
+    }
+  } catch {
+    return null
+  }
+}
+
 function reportAlreadyRunning(): void {
+  const running = readInstanceMarker()
+  const since = running?.startedAt
+    ? new Date(running.startedAt).toLocaleString('zh-CN', { hour12: false })
+    : ''
   try {
     dialog.showMessageBoxSync({
       type: 'info',
       title: '华强以太已在运行',
-      message: '已有一个实例正在运行（可能正在以管理员身份重启）。',
+      message: running?.version
+        ? `已有一个实例正在运行（版本 ${running.version}${since ? `，启动于 ${since}` : ''}）。`
+        : '已有一个实例正在运行（可能正在以管理员身份重启）。',
+      detail: since
+        ? '如果你刚刚更新过程序，请先在旧窗口完全退出（托盘图标也要退出），再重新打开；否则启动的仍是旧版本。'
+        : undefined,
       buttons: ['知道了'],
       noLink: true
     })
@@ -98,6 +134,7 @@ elevationLog(
 if (!gotLock) {
   reportAlreadyRunning()
 } else {
+  writeInstanceMarker()
   app.on('second-instance', focusOrRecreateWindow)
   app
     .whenReady()

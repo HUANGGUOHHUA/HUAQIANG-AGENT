@@ -67,6 +67,47 @@ export function parseWindowLine(raw: string): WindowBounds | null {
   return { title: raw.slice(0, bar).trim(), x, y, width, height }
 }
 
+function editDistance(a: string, b: string): number {
+  if (!a.length) return b.length
+  if (!b.length) return a.length
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index)
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i]
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      )
+    }
+    previous = current
+  }
+  return previous[b.length]
+}
+
+/**
+ * 找不到目标文字时，找出相近的行（OCR 常把「柯」认成「村」）。
+ * 只用于提示，不会自动点击，避免点错人。
+ */
+export function nearestLines<T extends { text: string }>(
+  lines: T[],
+  wanted: string,
+  limit = 5
+): T[] {
+  const target = wanted.replace(/\s+/g, '').toLowerCase()
+  if (!target) return []
+  const maxDistance = Math.max(1, Math.floor(target.length / 2))
+  return lines
+    .map((line) => ({
+      line,
+      distance: editDistance(line.text.replace(/\s+/g, '').toLowerCase(), target)
+    }))
+    .filter((item) => item.distance > 0 && item.distance <= maxDistance)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, limit)
+    .map((item) => item.line)
+}
+
 export interface OcrLine {
   text: string
   x: number
@@ -237,23 +278,43 @@ export class DesktopSession {
     return { ...result, engine: 'windows', region: undefined }
   }
 
-  /** 用快速 Windows OCR 找到文字并点击中心，供 screen_click 使用。 */
+  /** 在当前前台窗口里找文字并点击中心；找不到时给出相近文字和坐标。 */
   async clickText(text: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
-    const shot = await this.capture()
+    const shot = await this.capture(false, true)
     try {
-      const ocr = await this.ocr(shot.path, { useRapid: false })
+      const ocr = await this.ocr(shot.path, { useRapid: true })
+      const absolute = ocr.lines.map((line) => ({
+        ...line,
+        x: shot.bounds.x + line.x,
+        y: shot.bounds.y + line.y
+      }))
+      // 只看前台窗口，避免点到桌面图标或另一块屏上的同名文字。
+      const pool = shot.foreground ? linesInWindow(absolute, shot.foreground) : absolute
       const normalize = (value: string): string => value.replace(/\s+/g, '').toLowerCase()
       const wanted = normalize(text)
-      const line = ocr.lines.find((entry) => normalize(entry.text).includes(wanted))
+      const line = pool.find((entry) => normalize(entry.text).includes(wanted))
       if (!line) {
-        const sample = ocr.lines
+        const near = nearestLines(pool, text)
+        if (near.length) {
+          throw new ToolError(
+            `没有找到文字「${text}」。相近文字：${near
+              .map(
+                (entry) =>
+                  `「${entry.text}」(${Math.round(entry.x + entry.width / 2)}, ${Math.round(entry.y + entry.height / 2)})`
+              )
+              .join('、')}。确认目标后可以按坐标点击，或用 screen_click_target 按描述点击。`
+          )
+        }
+        const sample = pool
           .slice(0, 10)
           .map((item) => item.text)
           .join('、')
-        throw new ToolError(`没有找到文字「${text}」${sample ? `。屏幕文字：${sample}` : ''}`)
+        throw new ToolError(
+          `没有找到文字「${text}」${sample ? `。当前窗口文字：${sample}` : ''}`
+        )
       }
-      const x = Math.round(shot.bounds.x + line.x + line.width / 2)
-      const y = Math.round(shot.bounds.y + line.y + line.height / 2)
+      const x = Math.round(line.x + line.width / 2)
+      const y = Math.round(line.y + line.height / 2)
       this.options.highlight?.({ x, y, width: line.width, height: line.height, label: line.text })
       await runPowerShell(
         'desktop-mouse',
