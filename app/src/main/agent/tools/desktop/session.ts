@@ -188,6 +188,21 @@ function parseBounds(raw: string): ScreenBounds {
  * 工具定义只描述参数，真正的系统调用都收敛到这里，避免每个工具重复
  * “高亮 → 执行 → 等待 → 失效缓存”的样板代码。
  */
+/**
+ * 接管期间被藏起来的主窗口。桌面操作全程保持隐藏，避免遮挡目标、
+ * 抢焦点或把目标窗口压到别的窗口下面；运行结束时统一恢复。
+ */
+let hiddenWindow: { win: BrowserWindow; wasVisible: boolean } | null = null
+
+/** 桌面任务结束后把主窗口放回来（不抢焦点）。 */
+export function restoreDesktopWindow(): void {
+  const hidden = hiddenWindow
+  hiddenWindow = null
+  if (hidden && hidden.wasVisible && !hidden.win.isDestroyed()) {
+    hidden.win.showInactive()
+  }
+}
+
 export class DesktopSession {
   private rapidUnavailable = false
 
@@ -198,18 +213,16 @@ export class DesktopSession {
 
   /**
    * 把自己藏起来，避免挡住目标窗口或抢走焦点。
-   * 返回的恢复函数用 showInactive 显示窗口，不会重新抢焦点。
+   * 整个桌面任务期间保持隐藏，直到 restoreDesktopWindow() 才显示。
    */
   private async hideApp(suspendOverlay: boolean): Promise<() => void> {
     if (suspendOverlay) this.options.suspendOverlay?.()
     const win = this.getWindow()
-    const wasVisible = Boolean(win && !win.isDestroyed() && win.isVisible())
-    if (wasVisible) win!.hide()
-    let restored = false
+    if (win && !win.isDestroyed() && win.isVisible()) {
+      hiddenWindow = { win, wasVisible: true }
+      win.hide()
+    }
     return () => {
-      if (restored) return
-      restored = true
-      if (wasVisible && win && !win.isDestroyed()) win.showInactive()
       if (suspendOverlay) this.options.resumeOverlay?.()
     }
   }

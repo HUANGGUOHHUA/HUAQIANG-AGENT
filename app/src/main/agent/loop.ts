@@ -488,10 +488,14 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
       }
     })
 
+    // 有些小模型把最终回答只写在 reasoning 里，content 为空；没有工具调用时
+    // 用 reasoning 兜底，避免用户看到一条空白回复。
+    const finalText =
+      result.text.trim() || (toolCalls.length ? '' : result.reasoning.trim())
     const assistantMessage: AppMessage = {
       id: messageId,
       role: 'assistant',
-      content: result.text,
+      content: finalText,
       reasoning: result.reasoning || undefined,
       toolCalls: toolCalls.length ? toolCalls : undefined,
       createdAt,
@@ -583,8 +587,10 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
       const signature = `${call.name}:${JSON.stringify(call.args ?? {})}`
       const seen = (repeatCounts.get(signature) ?? 0) + 1
       repeatCounts.set(signature, seen)
-      if (seen > 2) {
-        // 第三次同样的调用直接拒绝：同样的输入不会得到不同的结果。
+      // 读工具（OCR/视觉）允许重复观察，因为窗口可能变化；动作工具第三次就拒绝。
+      const repeatLimit = definition.risk === 'read' ? 3 : 2
+      if (seen > repeatLimit) {
+        // 同样的调用重复太多次就拒绝：同样的输入不会得到不同的结果。
         call.status = 'error'
         call.isError = true
         call.result =

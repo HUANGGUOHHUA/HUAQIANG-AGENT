@@ -306,7 +306,7 @@ export function createDesktopTools(
         }
         const target = stringArg(args, 'target', { required: true, max: 300 }).trim()
         if (!target) throw new ToolError('target 不能为空')
-        const shot = await session.capture(true)
+        const shot = await session.capture(true, true)
         try {
           const bytes = await readFile(shot.path)
           const raw = await options.analyzeImage(buildVisualPrompt(`点击「${target}」`, shot.bounds), {
@@ -331,6 +331,21 @@ export function createDesktopTools(
           }
           const x = Math.round(shot.bounds.x + action.x)
           const y = Math.round(shot.bounds.y + action.y)
+          // 模型常把坐标估到别的窗口上；不在前台窗口内就不点，避免点错应用。
+          const foreground = shot.foreground
+          if (
+            foreground &&
+            (x < foreground.x ||
+              x > foreground.x + foreground.width ||
+              y < foreground.y ||
+              y > foreground.y + foreground.height)
+          ) {
+            throw new ToolError(
+              `视觉模型给出的坐标 (${x}, ${y}) 不在前台窗口「${foreground.title}」内` +
+                `（${foreground.x},${foreground.y} ${foreground.width}x${foreground.height}）。` +
+                '没有点击。请重新确认目标位置，或先用 window_focus 切到正确的窗口。'
+            )
+          }
           const clicks =
             action.action === 'double_click' ? 2 : numberArg(args, 'clicks', 1, 1, 3)
           const button =

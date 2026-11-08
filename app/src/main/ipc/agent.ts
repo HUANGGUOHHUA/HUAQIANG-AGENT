@@ -15,6 +15,7 @@ import { buildSystemPrompt } from '../agent/prompt'
 import { streamModel } from '../agent/providers'
 import { createAppControlTool, createBrowserTools } from '../agent/tools/browser'
 import { createDesktopTools } from '../agent/tools/desktop'
+import { restoreDesktopWindow } from '../agent/tools/desktop/session'
 import { createFileTools } from '../agent/tools/files'
 import { runCommandTool } from '../agent/tools/shell'
 import { systemInfoTool, webFetchTool } from '../agent/tools/system'
@@ -275,6 +276,7 @@ function registerRunIpc(): void {
         state.approval.cancelRun(runId)
         sender.removeListener('destroyed', onDestroyed)
         hideControlOverlay()
+        restoreDesktopWindow()
         if (escapeRegistered) {
           try {
             globalShortcut.unregister('Escape')
