@@ -97,6 +97,9 @@ export default function SettingsModal({
   const didAutoFetch = useRef(false)
   const selectedIdRef = useRef(selectedId)
   const savedTimerRef = useRef<number | null>(null)
+  const pendingSavedRef = useRef<UiSettings | null>(null)
+  const onSavedRef = useRef(onSaved)
+  onSavedRef.current = onSaved
 
   useEffect(() => {
     selectedIdRef.current = selectedId
@@ -104,14 +107,25 @@ export default function SettingsModal({
 
   useEffect(
     () => () => {
-      if (savedTimerRef.current !== null) window.clearTimeout(savedTimerRef.current)
+      if (savedTimerRef.current !== null) {
+        window.clearTimeout(savedTimerRef.current)
+        savedTimerRef.current = null
+      }
+      // The save is already on disk; make sure the app still receives it even
+      // when the dialog closes before the 350ms confirmation delay.
+      const pending = pendingSavedRef.current
+      pendingSavedRef.current = null
+      if (pending) onSavedRef.current(pending)
     },
     []
   )
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !saving) onClose()
+      if (event.key !== 'Escape' || saving) return
+      // The approval dialog owns Escape while it is open.
+      if (document.querySelector('.approval-modal')) return
+      onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -354,7 +368,12 @@ export default function SettingsModal({
     try {
       const updated = await window.hq.saveSettings(input)
       setSaved(true)
-      savedTimerRef.current = window.setTimeout(() => onSaved(updated), 350)
+      pendingSavedRef.current = updated
+      savedTimerRef.current = window.setTimeout(() => {
+        savedTimerRef.current = null
+        pendingSavedRef.current = null
+        onSavedRef.current(updated)
+      }, 350)
     } catch (saveError) {
       setError(stripIpcError(saveError instanceof Error ? saveError.message : String(saveError)))
     } finally {
@@ -807,7 +826,13 @@ export default function SettingsModal({
       </div>
 
       {confirmAuto && (
-        <div className="modal-backdrop confirm-backdrop" onMouseDown={() => setConfirmAuto(false)}>
+        <div
+          className="modal-backdrop confirm-backdrop"
+          onMouseDown={(event) => {
+            event.stopPropagation()
+            setConfirmAuto(false)
+          }}
+        >
           <div className="confirm-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <div className="confirm-dialog-icon warn">
               <ShieldAlert size={20} />

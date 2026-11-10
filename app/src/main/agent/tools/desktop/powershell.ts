@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -37,7 +38,7 @@ export async function runPowerShell(
   args: string[],
   timeout = 20_000
 ): Promise<string> {
-  const script = join(tmpdir(), `huaqiang-${name}.ps1`)
+  const script = join(tmpdir(), `huaqiang-${name}-${randomUUID()}.ps1`)
   await writeFile(script, content, 'utf8')
   try {
     const { stdout } = await run(
@@ -57,5 +58,7 @@ export async function runPowerShell(
         3_000
       )
     )
+  } finally {
+    await unlink(script).catch(() => undefined)
   }
 }

@@ -151,14 +151,16 @@ export default function ApprovalModal({
             <Ban size={14} /> 拒绝
           </button>
           <div className="approval-actions-right">
-            <button
-              type="button"
-              className="btn secondary small"
-              onClick={() => onDecision('always')}
-              title={alwaysLabel}
-            >
-              本会话始终允许
-            </button>
+            {request.sticky !== false && (
+              <button
+                type="button"
+                className="btn secondary small"
+                onClick={() => onDecision('always')}
+                title={alwaysLabel}
+              >
+                本会话始终允许
+              </button>
+            )}
             <button type="button" className="btn primary" onClick={() => onDecision('allow')}>
               <Check size={15} /> 仅本次允许
             </button>

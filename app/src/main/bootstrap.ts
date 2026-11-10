@@ -1,4 +1,4 @@
-import { app, dialog } from 'electron'
+import { app, dialog, type WebContents } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { ApprovalService } from './approval'
@@ -49,7 +49,7 @@ export async function bootstrap(): Promise<void> {
   state.settings = new SettingsStore()
   state.python = new PythonEnvironment()
   if (shouldElevateOnStart()) {
-    if (relaunchElevated()) {
+    if (await relaunchElevated()) {
       app.quit()
       return
     }
@@ -132,12 +132,18 @@ function createServices(): void {
   state.builtinMcp = new BuiltinMcpService({
     workspace: () => state.settings.getRaw().workspace,
     pythonPath: () => state.python.currentPythonPath(),
-    version: app.getVersion()
+    version: app.getVersion(),
+    networkLocked: () => state.settings.getRaw().networkLocked
   })
   state.approval = new ApprovalService()
-  state.browserBridge = new BrowserBridge('browser')
+  const isTrustedSender = (sender: WebContents): boolean => {
+    const main = state.mainWindow?.webContents
+    if (!main) return true
+    return sender.id === main.id || sender.hostWebContents?.id === main.id
+  }
+  state.browserBridge = new BrowserBridge('browser', isTrustedSender)
   state.browserBridge.registerIpc()
-  state.appBridge = new BrowserBridge('app')
+  state.appBridge = new BrowserBridge('app', isTrustedSender)
   state.appBridge.registerIpc()
 }
 

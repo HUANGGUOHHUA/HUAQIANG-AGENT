@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
@@ -34,11 +35,24 @@ function Await($WinRtTask, $ResultType) {
 $source = [System.Drawing.Bitmap]::FromFile($Path)
 $originalWidth = $source.Width
 $originalHeight = $source.Height
+if ([double]$originalWidth * [double]$originalHeight -gt 40000000) {
+  $source.Dispose()
+  throw "图片尺寸过大（$($originalWidth)x$($originalHeight)），请先缩小后再识别"
+}
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("hq-ocr-" + [Guid]::NewGuid().ToString("N") + ".png")
+trap {
+  Remove-Item $temp -Force -ErrorAction SilentlyContinue
+  throw
+}
 $scaleFactor = 1.0
 try {
   # Upscale before OCR. Windows OCR loses a lot of accuracy on 12-14px UI text.
   $scaleFactor = [Math]::Max(1.0, [Math]::Min(2.0, $Scale))
+  # Keep the upscaled bitmap under the same 40MP budget as the source image.
+  while ($scaleFactor -gt 1.0 -and
+    ([double]$originalWidth * $scaleFactor) * ([double]$originalHeight * $scaleFactor) -gt 40000000) {
+    $scaleFactor = [Math]::Max(1.0, $scaleFactor - 0.1)
+  }
   $targetWidth = [Math]::Max(1, [int][Math]::Round($originalWidth * $scaleFactor))
   $targetHeight = [Math]::Max(1, [int][Math]::Round($originalHeight * $scaleFactor))
   $scaled = New-Object System.Drawing.Bitmap($targetWidth, $targetHeight)
@@ -123,21 +137,10 @@ try {
 }
 `
 
-let scriptReady: Promise<string> | null = null
-
-function ensureScript(): Promise<string> {
-  if (scriptReady) return scriptReady
-  const pending = (async () => {
-    const path = join(tmpdir(), 'huaqiang-win-ocr.ps1')
-    const current = existsSync(path) ? await readFile(path, 'utf8').catch(() => '') : ''
-    if (current !== OCR_SCRIPT) await writeFile(path, OCR_SCRIPT, 'utf8')
-    return path
-  })()
-  scriptReady = pending
-  pending.catch(() => {
-    if (scriptReady === pending) scriptReady = null
-  })
-  return pending
+async function ensureScript(): Promise<string> {
+  const path = join(tmpdir(), `huaqiang-win-ocr-${randomUUID()}.ps1`)
+  await writeFile(path, OCR_SCRIPT, 'utf8')
+  return path
 }
 
 export function normalizeOcrText(text: string): string {
@@ -171,13 +174,17 @@ async function runOcr(path: string, json: boolean): Promise<string> {
   const script = await ensureScript()
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', path, '-Scale', '2.0']
   if (json) args.push('-Json')
-  const { stdout } = await run('powershell.exe', args, {
-    timeout: 60_000,
-    windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024,
-    encoding: 'utf8'
-  })
-  return stdout
+  try {
+    const { stdout } = await run('powershell.exe', args, {
+      timeout: 60_000,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+      encoding: 'utf8'
+    })
+    return stdout
+  } finally {
+    await unlink(script).catch(() => undefined)
+  }
 }
 
 /** OCR an image and return line bounding boxes in original image pixels. */

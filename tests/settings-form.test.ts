@@ -4,8 +4,10 @@ import {
   draftFromProfile,
   formatTokens,
   parsePairs,
-  pairsText
+  pairsText,
+  toSaveInput
 } from '../app/src/renderer/src/lib/settings-form'
+import type { UiSettings } from '../app/src/shared/types'
 
 const saved = {
   id: 'p1',
@@ -50,5 +52,39 @@ describe('settings form helpers', () => {
     expect(formatTokens(512)).toBe('512')
     expect(formatTokens(128_000)).toBe('128K')
     expect(formatTokens(1_500_000)).toBe('1.5M')
+  })
+
+  it('keeps security and vision flags when a quick override is saved', () => {
+    const settings: UiSettings = {
+      version: 1,
+      profiles: [
+        {
+          id: 'p1',
+          name: '通用接口',
+          provider: 'openai',
+          baseUrl: 'https://api.example.com/v1',
+          model: 'demo',
+          contextWindow: 128_000,
+          temperature: 0.3,
+          maxTokens: 8_192,
+          hasKey: true,
+          vision: true
+        }
+      ],
+      activeProfileId: 'p1',
+      workspace: 'C:/workspace',
+      elevateOnStart: false,
+      agentElevated: false,
+      approvalMode: 'ask',
+      maxSteps: 0,
+      networkLocked: true,
+      mcpServers: [],
+      systemPromptExtra: '',
+      encryptionAvailable: false
+    }
+    const input = toSaveInput(settings, { approvalMode: 'auto' })
+    expect(input.networkLocked).toBe(true)
+    expect(input.profiles[0].vision).toBe(true)
+    expect(input.approvalMode).toBe('auto')
   })
 })

@@ -121,6 +121,14 @@ function BrowserTabView({
   const webviewRef = useRef<HqWebviewElement | null>(null)
   const tabId = tab.id
 
+  const setWebviewRef = useCallback(
+    (node: HqWebviewElement | null): void => {
+      webviewRef.current = node
+      registerView(tabId, node)
+    },
+    [tabId, registerView]
+  )
+
   useEffect(() => {
     const view = webviewRef.current
     if (!view) return
@@ -173,10 +181,7 @@ function BrowserTabView({
 
   return (
     <webview
-      ref={(node) => {
-        webviewRef.current = node as HqWebviewElement | null
-        registerView(tabId, webviewRef.current)
-      }}
+      ref={setWebviewRef}
       className={cn('browser-webview', !active && 'browser-webview-hidden')}
       style={{ flex: 1 }}
       partition="persist:hqbrowser"
@@ -266,10 +271,10 @@ export default function BrowserPane(): React.JSX.Element {
       viewWaiters.current.set(id, waiters)
       window.setTimeout(() => {
         const list = viewWaiters.current.get(id)
-        if (list) {
-          viewWaiters.current.delete(id)
-          list.splice(0, list.length)
-        }
+        if (!list) return
+        const index = list.indexOf(resolve)
+        if (index >= 0) list.splice(index, 1)
+        if (!list.length) viewWaiters.current.delete(id)
         reject(new Error('浏览器标签页尚未就绪'))
       }, 5_000)
     })

@@ -15,7 +15,7 @@ export function findRepetition(text: string): RepetitionMatch | null {
 
   // Repeated sentence/line blocks (most common chat-model loop).
   const chunks = tail.match(/[^\n。！？.!?]{12,300}[。！？.!?]?/g) ?? []
-  const positions = new Map<string, number[]>()
+  const positions = new Map<string, Array<{ index: number; length: number }>>()
   let cursor = 0
   for (const chunk of chunks) {
     const normalized = chunk.replace(/\s+/g, ' ').trim()
@@ -23,12 +23,21 @@ export function findRepetition(text: string): RepetitionMatch | null {
     cursor = index >= 0 ? index + chunk.length : cursor
     if (normalized.length < 12) continue
     const list = positions.get(normalized) ?? []
-    list.push(index >= 0 ? index : 0)
+    list.push({ index: index >= 0 ? index : 0, length: chunk.length })
     positions.set(normalized, list)
   }
   for (const [sample, list] of positions) {
-    if (list.length >= 3) {
-      return { start: offset + list[0], sample: sample.slice(0, 120) }
+    if (list.length < 3) continue
+    const last = list[list.length - 1]
+    const prev = list[list.length - 2]
+    const prev2 = list[list.length - 3]
+    // Only a truly contiguous block is a generation loop. Repeated phrases with
+    // other prose in between are legitimate content and must be preserved.
+    if (
+      last.index === prev.index + prev.length &&
+      prev.index === prev2.index + prev2.length
+    ) {
+      return { start: offset + last.index, sample: sample.slice(0, 120) }
     }
   }
 

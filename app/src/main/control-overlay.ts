@@ -5,6 +5,26 @@ let overlay: BrowserWindow | null = null
 let active = false
 let suspended = false
 let released = false
+let pendingStatus = '正在等待模型…'
+let statusTimer: ReturnType<typeof setTimeout> | null = null
+
+function flushStatus(): void {
+  if (!overlay || overlay.isDestroyed() || overlay.webContents.isLoading()) return
+  const script = `window.__hqStatus && window.__hqStatus(${JSON.stringify(pendingStatus)})`
+  void overlay.webContents.executeJavaScript(script).catch(() => undefined)
+}
+
+/** 更新控制浮层里显示的“大模型当前在做什么”。 */
+export function updateControlOverlayStatus(text: string): void {
+  if (!active || released) return
+  pendingStatus = text.trim().slice(0, 1000) || '正在等待模型…'
+  if (statusTimer) return
+  statusTimer = setTimeout(() => {
+    statusTimer = null
+    if (suspended) return
+    flushStatus()
+  }, 250)
+}
 
 function virtualBounds(): { x: number; y: number; width: number; height: number } {
   const displays = screen.getAllDisplays()
@@ -38,13 +58,21 @@ function overlayHtml(): string {
   }
   .banner {
     position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 16px; border-radius: 999px;
-    color: #e0f2fe; background: rgba(8, 47, 73, .88);
+    display: flex; flex-direction: column; align-items: stretch; gap: 5px;
+    padding: 10px 16px; border-radius: 14px;
+    color: #e0f2fe; background: rgba(8, 47, 73, .9);
     border: 1px solid rgba(125, 211, 252, .65);
     box-shadow: 0 8px 28px rgba(2, 132, 199, .35);
     font: 600 13px/1.2 "Microsoft YaHei", "Segoe UI", sans-serif;
-    letter-spacing: .02em; white-space: nowrap;
+    letter-spacing: .02em; white-space: normal;
+    width: min(760px, calc(100vw - 40px));
+  }
+  .banner-head { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  .status {
+    font-weight: 400; font-size: 12px; line-height: 1.45;
+    color: rgba(224, 242, 254, .92);
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+    overflow: hidden; word-break: break-word; white-space: pre-line;
   }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 10px #38bdf8; }
   .key { padding: 2px 7px; border-radius: 5px; border: 1px solid rgba(186, 230, 253, .55); font-size: 11px; color: #bae6fd; }
@@ -74,10 +102,13 @@ function overlayHtml(): string {
 <body>
   <div class="frame"></div>
   <div class="banner">
-    <span class="dot"></span>
-    <span>华强以太正在控制 · 鼠标已锁定</span>
-    <span class="hint">退出请按</span>
-    <span class="key">ESC</span>
+    <div class="banner-head">
+      <span class="dot"></span>
+      <span>华强以太正在控制 · 鼠标已锁定</span>
+      <span class="hint">退出请按</span>
+      <span class="key">ESC</span>
+    </div>
+    <div class="status" id="status">正在等待模型…</div>
   </div>
   <div class="target" id="target"></div>
   <div class="target-label" id="targetLabel"></div>
@@ -108,6 +139,10 @@ function overlayHtml(): string {
           box.style.display = 'none'
           label.style.display = 'none'
         }, 1100)
+      }
+      const status = document.getElementById('status')
+      window.__hqStatus = (text) => {
+        if (status) status.textContent = text || '正在等待模型…'
       }
       window.__hqClearHighlight = () => {
         clearTimeout(hideTimer)
@@ -159,9 +194,11 @@ export function showControlOverlay(): void {
   active = true
   suspended = false
   released = false
+  pendingStatus = '正在等待模型…'
   startInputLock(process.pid)
   const win = ensureOverlay()
   win.setBounds(virtualBounds())
+  win.webContents.once('did-finish-load', () => flushStatus())
   void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml())}`)
   win.showInactive()
 }
@@ -170,6 +207,11 @@ export function hideControlOverlay(): void {
   active = false
   suspended = false
   released = false
+  if (statusTimer) {
+    clearTimeout(statusTimer)
+    statusTimer = null
+  }
+  pendingStatus = '正在等待模型…'
   stopInputLock()
   if (overlay && !overlay.isDestroyed()) {
     overlay.hide()
@@ -189,6 +231,7 @@ export function resumeControlOverlay(): void {
     overlay.setBounds(virtualBounds())
     overlay.showInactive()
   }
+  flushStatus()
 }
 
 /**

@@ -120,7 +120,26 @@ function parseFallbackJson(
   const choices = Array.isArray(json.choices) ? json.choices : []
   const choice = (choices[0] ?? {}) as Record<string, unknown>
   const message = (choice.message ?? {}) as Record<string, unknown>
-  const rawText = typeof message.content === 'string' ? message.content : ''
+  const rawContent = message.content
+  let rawText = ''
+  if (typeof rawContent === 'string') {
+    rawText = rawContent
+  } else if (Array.isArray(rawContent)) {
+    rawText = rawContent
+      .map((part) =>
+        part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string'
+          ? String((part as Record<string, unknown>).text)
+          : ''
+      )
+      .join('')
+  }
+  const reasoning =
+    typeof message.reasoning_content === 'string'
+      ? message.reasoning_content
+      : typeof message.reasoning === 'string'
+        ? message.reasoning
+        : ''
+  if (reasoning) callbacks.onReasoning?.(reasoning)
   const repetition = Boolean(findRepetition(rawText))
   const text = repetition ? cleanRepetition(rawText) : rawText
   if (text) callbacks.onText(text)

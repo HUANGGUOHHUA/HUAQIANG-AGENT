@@ -1,4 +1,5 @@
 import { desktopCapturer, ipcMain, screen, type BrowserWindow } from 'electron'
+import { handleTrusted } from './ipc/trust'
 
 export interface ScreenshotPayload {
   dataUrl: string
@@ -42,8 +43,7 @@ export async function capturePrimaryScreen(
       }
     } finally {
       if (wasVisible && !win.isDestroyed()) {
-        win.show()
-        win.focus()
+        win.showInactive()
       }
     }
   } catch {
@@ -52,7 +52,7 @@ export async function capturePrimaryScreen(
 }
 
 export function registerScreenshotIpc(getWindow: () => BrowserWindow | null): void {
-  ipcMain.handle(
+  handleTrusted(
     'screenshot:capture',
     async (): Promise<ScreenshotPayload | null> => capturePrimaryScreen(getWindow)
   )

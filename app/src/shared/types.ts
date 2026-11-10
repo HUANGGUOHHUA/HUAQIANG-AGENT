@@ -267,6 +267,8 @@ export interface ApprovalRequest {
   risk: ToolRisk
   summary: string
   preview: string
+  /** false when this approval must be repeated each time (desktop takeover, danger re-check). */
+  sticky?: boolean
 }
 
 export type ApprovalDecision = 'deny' | 'allow' | 'always'

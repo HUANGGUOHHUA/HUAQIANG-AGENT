@@ -1,4 +1,6 @@
+import { unlink } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
+import { DesktopSession } from '../app/src/main/agent/tools/desktop/session'
 
 vi.mock('electron', () => ({
   desktopCapturer: { getSources: async () => [] },
@@ -94,5 +96,87 @@ describe('desktop vision', () => {
     const tool = tools.find((item) => item.name === 'screen_click_target')!
     const result = await tool.execute({ target: '发送按钮' }, context)
     expect(result.output).toContain('没有在屏幕上看到「发送按钮」')
+  }, 45_000)
+
+  it('makes the main window transparent instead of hiding it during takeover', async () => {
+    const calls: Array<[string, unknown]> = []
+    const fakeWin = {
+      isDestroyed: () => false,
+      isVisible: () => true,
+      getOpacity: () => 1,
+      setContentProtection: (value: boolean) => calls.push(['protect', value]),
+      setOpacity: (value: number) => calls.push(['opacity', value]),
+      setIgnoreMouseEvents: (value: boolean) => calls.push(['ignore', value]),
+      blur: () => calls.push(['blur', true]),
+      showInactive: () => calls.push(['showInactive', true])
+    }
+    const session = new DesktopSession(() => fakeWin as never, {})
+    const shot = await session.capture(false, false)
+    try {
+      expect(calls).toContainEqual(['protect', true])
+      expect(calls).toContainEqual(['opacity', 0])
+      expect(calls).toContainEqual(['ignore', true])
+      expect(calls).toContainEqual(['showInactive', true])
+    } finally {
+      shot.restore()
+      await unlink(shot.path).catch(() => undefined)
+    }
+    expect(calls).toContainEqual(['opacity', 1])
+    expect(calls).toContainEqual(['ignore', false])
+    expect(calls).toContainEqual(['protect', false])
+  }, 45_000)
+
+  it('keeps the window transparent until the outermost takeover ends', async () => {
+    const calls: Array<[string, unknown]> = []
+    const fakeWin = {
+      isDestroyed: () => false,
+      isVisible: () => true,
+      getOpacity: () => 1,
+      setContentProtection: (value: boolean) => calls.push(['protect', value]),
+      setOpacity: (value: number) => calls.push(['opacity', value]),
+      setIgnoreMouseEvents: (value: boolean) => calls.push(['ignore', value]),
+      blur: () => calls.push(['blur', true]),
+      showInactive: () => calls.push(['showInactive', true])
+    }
+    const session = new DesktopSession(() => fakeWin as never, {})
+    const outer = await session.capture(true, false)
+    const inner = await session.capture(false, false)
+    inner.restore()
+    expect([...calls].reverse().find(([name]) => name === 'opacity')).toEqual([
+      'opacity',
+      0
+    ])
+    outer.restore()
+    expect([...calls].reverse().find(([name]) => name === 'opacity')).toEqual([
+      'opacity',
+      1
+    ])
+    await unlink(outer.path).catch(() => undefined)
+    await unlink(inner.path).catch(() => undefined)
+  }, 45_000)
+
+  it('returns null for a missing window without script errors', async () => {
+    const session = new DesktopSession(() => null, {})
+    await expect(session.focusWindow('绝对不存在的窗口标题-ZZZ')).resolves.toBeNull()
+  }, 45_000)
+
+  it('returns null when the process cannot be restored', async () => {
+    const session = new DesktopSession(() => null, {})
+    await expect(session.restoreWindow('NoSuchProcessZZZ', '', false, 0)).resolves.toBeNull()
+  }, 45_000)
+
+  it('scales large screenshots down to the visual edge limit', async () => {
+    const session = new DesktopSession(() => null, {})
+    const shot = await session.capture(false, false)
+    let crop: Awaited<ReturnType<typeof session.cropWindow>> | null = null
+    try {
+      crop = await session.cropWindow(shot.path, shot.bounds, shot.bounds, 640)
+      expect(crop.width).toBeLessThanOrEqual(640)
+      expect(crop.height).toBeLessThanOrEqual(640)
+      expect(crop.scale).toBeGreaterThanOrEqual(1)
+    } finally {
+      await unlink(shot.path).catch(() => undefined)
+      if (crop) await unlink(crop.path).catch(() => undefined)
+    }
   }, 45_000)
 })

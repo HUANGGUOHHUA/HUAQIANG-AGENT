@@ -1,4 +1,5 @@
 import { app, clipboard, globalShortcut, ipcMain } from 'electron'
+import { handleTrusted } from './trust'
 import { unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
@@ -18,17 +19,20 @@ import { createDesktopTools } from '../agent/tools/desktop'
 import { restoreDesktopWindow } from '../agent/tools/desktop/session'
 import { createFileTools } from '../agent/tools/files'
 import { runCommandTool } from '../agent/tools/shell'
+import { revealTool } from '../agent/tools/reveal'
 import { systemInfoTool, webFetchTool } from '../agent/tools/system'
 import type { ToolDefinition } from '../agent/tools/types'
 import { prepareAttachmentsForModel } from '../agent/vision'
 import {
   hideControlOverlay,
   highlightControl,
+  isControlOverlayActive,
   releaseControlOverlay,
   restoreControlOverlay,
   resumeControlOverlay,
   showControlOverlay,
-  suspendControlOverlay
+  suspendControlOverlay,
+  updateControlOverlayStatus
 } from '../control-overlay'
 import { withNetworkLock } from '../network-lock'
 import { activeRuns, state } from '../state'
@@ -37,13 +41,92 @@ import { diffWorkspace, snapshotWorkspace } from '../workspace-changes'
 
 const PYTHON_FALLBACK = 'python.exe'
 
+let overlayThought = ''
+let overlayText = ''
+let overlaySteps: string[] = []
+
+function toolDetail(args: unknown): string {
+  if (!args || typeof args !== 'object') return ''
+  const record = args as Record<string, unknown>
+  for (const key of ['target', 'path', 'text', 'command', 'query', 'keys', 'url', 'name']) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 60)
+  }
+  return ''
+}
+
+function flushOverlay(): void {
+  const lines = [...overlaySteps]
+  if (overlayThought) lines.push(`思考：${overlayThought}`)
+  else if (overlayText) lines.push(`回复：${overlayText}`)
+  updateControlOverlayStatus(lines.join('\n') || '正在思考…')
+}
+
+function updateOverlayFromEvent(event: AgentEvent): void {
+  if (event.type === 'run-start') {
+    overlayThought = ''
+    overlayText = ''
+    overlaySteps = []
+    return
+  }
+  if (!isControlOverlayActive()) return
+  switch (event.type) {
+    case 'assistant-start':
+      overlayThought = ''
+      overlayText = ''
+      updateControlOverlayStatus('正在思考…')
+      break
+    case 'reasoning-delta':
+      overlayThought = `${overlayThought}${event.delta}`.slice(-180)
+      flushOverlay()
+      break
+    case 'text-delta':
+      overlayText = `${overlayText}${event.delta}`.slice(-180)
+      flushOverlay()
+      break
+    case 'tool-start': {
+      const detail = toolDetail(event.args)
+      overlayThought = ''
+      overlayText = ''
+      const line = `▶ ${event.displayName || event.name}${detail ? `：${detail}` : ''}`
+      overlaySteps = [...overlaySteps, line].slice(-3)
+      flushOverlay()
+      break
+    }
+    case 'tool-end':
+      overlaySteps = [
+        ...overlaySteps,
+        event.status === 'cancelled'
+          ? '■ 已中止'
+          : event.isError
+            ? `✗ 失败：${String(event.result ?? '').slice(0, 80)}`
+            : '✓ 完成'
+      ].slice(-3)
+      flushOverlay()
+      break
+    case 'notice':
+      updateControlOverlayStatus(`提示：${event.message}`)
+      break
+    case 'run-end':
+      overlaySteps = [
+        ...overlaySteps,
+        event.status === 'done' ? '✓ 任务完成' : '■ 任务结束'
+      ].slice(-3)
+      flushOverlay()
+      break
+    default:
+      break
+  }
+}
+
 /** 组装本次运行可用的工具：本地工具 → 提权 worker 代理 → 断网锁 → 桌面/浏览器工具。 */
 function buildCoreTools(): ToolDefinition[] {
   const base: ToolDefinition[] = [
     ...createFileTools(),
     runCommandTool,
     systemInfoTool,
-    webFetchTool
+    webFetchTool,
+    revealTool
   ]
   const proxied = state.worker?.ready ? base.map((tool) => state.worker!.proxyTool(tool)) : base
   return [
@@ -84,7 +167,9 @@ async function loadMcpTools(): Promise<ToolDefinition[]> {
     .mcpServers.filter((server) => server.transport === 'http')
     .map((server) => server.name)
   return tools.filter(
-    (tool) => !remoteNames.some((name) => tool.description.includes(`[MCP 服务器：${name}]`))
+    (tool) =>
+      !remoteNames.some((name) => tool.description.includes(`[MCP 服务器：${name}]`)) &&
+      !tool.name.endsWith('__web_search')
   )
 }
 
@@ -132,7 +217,7 @@ async function probeWorkspace(workspace: string, sender: Electron.WebContents, r
 }
 
 function registerCompactIpc(): void {
-  ipcMain.handle(
+  handleTrusted(
     'agent:compact',
     async (_event, input: CompactRequest): Promise<CompactResult> => {
       if (!input || !Array.isArray(input.messages)) {
@@ -241,7 +326,7 @@ function registerEscapeStop(): boolean {
 }
 
 function registerRunIpc(): void {
-  ipcMain.handle(
+  handleTrusted(
     'agent:run',
     async (event, input: AgentRunRequest): Promise<AgentRunResult> => {
       if (!input || typeof input !== 'object' || !Array.isArray(input.messages)) {
@@ -381,6 +466,7 @@ async function runSession({
       signal: controller.signal,
       emit: (payload) => {
         if (!sender.isDestroyed()) sender.send('agent:event', payload)
+        updateOverlayFromEvent(payload)
         if (payload.type === 'notice' && payload.message.includes('屏幕接管已开启')) {
           showControlOverlay()
         }
@@ -427,14 +513,14 @@ async function runSession({
 }
 
 function registerApprovalIpc(): void {
-  ipcMain.handle('agent:abort', (_event, runId: string) => {
+  handleTrusted('agent:abort', (_event, runId: string) => {
     const run = activeRuns.get(runId)
     if (!run) return
     run.controller.abort()
     state.approval.cancelRun(runId)
   })
 
-  ipcMain.handle('agent:approve', (_event, requestId: string, decision: ApprovalDecision) => {
+  handleTrusted('agent:approve', (_event, requestId: string, decision: ApprovalDecision) => {
     if (!['deny', 'allow', 'always'].includes(decision)) return
     state.approval.decide(requestId, decision)
   })

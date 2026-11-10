@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { dataDir } from './data-dir'
 import type {
@@ -28,7 +28,9 @@ interface StoredSettings {
   systemPromptExtra: string
 }
 
-const DEFAULT_API_KEY = "sk-134567890sv"
+// Placeholder credential for the built-in intranet gateway. Deployments can
+// replace it without rebuilding by setting HQ_DEFAULT_API_KEY.
+const DEFAULT_API_KEY = (process.env.HQ_DEFAULT_API_KEY || 'sk-134567890sv').trim()
 
 const DEFAULT_PROFILE: StoredProfile = {
   id: 'custom',
@@ -124,6 +126,7 @@ function cleanString(value: unknown, max = 4000): string {
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (value === null || value === undefined || value === '') return fallback
   const n = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(n)) return fallback
   return Math.min(max, Math.max(min, n))
@@ -240,15 +243,33 @@ export class SettingsStore {
       }
     } catch (error) {
       console.error('Failed to load settings, using defaults:', error)
+      try {
+        // Keep the broken file instead of letting the constructor overwrite it
+        // with defaults, so the user can still recover profiles and keys.
+        if (existsSync(this.file)) {
+          renameSync(this.file, `${this.file}.broken-${Date.now()}`)
+        }
+      } catch (backupError) {
+        console.error('Failed to back up broken settings:', backupError)
+      }
     }
     return defaults()
   }
 
   private persist(): void {
     mkdirSync(dirname(this.file), { recursive: true })
-    const temp = `${this.file}.tmp`
+    const temp = join(dirname(this.file), `.settings-${process.pid}-${Date.now()}.tmp`)
     writeFileSync(temp, JSON.stringify(this.data, null, 2), 'utf8')
-    renameSync(temp, this.file)
+    try {
+      renameSync(temp, this.file)
+    } catch (error) {
+      try {
+        unlinkSync(temp)
+      } catch {
+        // Ignore cleanup failures.
+      }
+      throw error
+    }
   }
 
   private toPublic(): UiSettings {

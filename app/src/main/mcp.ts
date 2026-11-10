@@ -25,6 +25,7 @@ interface Connection {
 
 function signature(config: McpServerConfig): string {
   return JSON.stringify({
+    name: config.name,
     transport: config.transport,
     command: config.command,
     args: config.args,
@@ -268,6 +269,7 @@ export class McpManager {
       { name: 'huaqiang-agent', version: '1.0.0' },
       { capabilities: {} }
     )
+    try {
     await withTimeout(client.connect(transport), 15_000, '内置 MCP 连接')
     const listed = await withTimeout(client.listTools(), 15_000, '内置 MCP 工具列表')
     const tools = (listed.tools ?? []).map((tool) => ({
@@ -319,6 +321,10 @@ export class McpManager {
     })
     this.broadcast()
     return { ...status, tools: [...status.tools] }
+    } catch (error) {
+      await client.close().catch(() => undefined)
+      throw error
+    }
   }
 
   private async closeConnection(id: string): Promise<void> {
@@ -362,7 +368,7 @@ export class McpManager {
       const prefix = `mcp__${serverName}__`
       let listed: Awaited<ReturnType<Client['listTools']>>
       try {
-        listed = await client.listTools()
+        listed = await withTimeout(client.listTools(), 20_000, 'MCP 工具列表加载')
       } catch {
         continue
       }
@@ -380,8 +386,9 @@ export class McpManager {
           description: `[MCP 服务器：${conn.config.name}] ${tool.description ?? ''}`.trim(),
           inputSchema: schema,
           risk: 'mcp',
+          confirmInAuto: conn.builtin && tool.name === 'python_run',
           summarize: (args) => `${conn.config.name} · ${tool.name} ${JSON.stringify(args).slice(0, 100)}`,
-          execute: async (args) => {
+          execute: async (args, context) => {
             if (conn.builtin && this.remoteBuiltin) {
               try {
                 const remote = await this.remoteBuiltin(tool.name, args)
@@ -397,7 +404,7 @@ export class McpManager {
               const result = await client.callTool(
                 { name: tool.name, arguments: args },
                 undefined,
-                { timeout: 120_000 }
+                { timeout: 120_000, signal: context.signal }
               )
               return {
                 output: contentToText(
@@ -442,12 +449,16 @@ export class McpManager {
             },
             risk: 'mcp',
             summarize: (args) => `${conn.config.name} 资源 ${String(args.action ?? 'list')}`,
-            execute: async (args) => {
+            execute: async (args, context) => {
               try {
                 if (String(args.action) === 'read') {
                   const uri = typeof args.uri === 'string' ? args.uri : ''
                   if (!uri) return { output: 'read 需要 uri 参数', isError: true }
-                  const result = await client.readResource({ uri })
+                  const result = await withTimeout(
+                    client.readResource({ uri }, { signal: context.signal }),
+                    30_000,
+                    'MCP 资源读取'
+                  )
                   const contents = (result.contents ?? []).map((item) => {
                     const record = item as Record<string, unknown>
                     if (typeof record.text === 'string') return record.text
@@ -455,7 +466,11 @@ export class McpManager {
                   })
                   return { output: contents.join('\n\n') || '(资源没有返回文本)' }
                 }
-                const listedResources = await client.listResources()
+const listedResources = await withTimeout(
+                  client.listResources(undefined, { signal: context.signal }),
+                  20_000,
+                  'MCP 资源列表加载'
+                )
                 const lines = (listedResources.resources ?? []).map(
                   (resource) =>
                     `- ${resource.name} (${resource.uri})${resource.description ? `：${resource.description}` : ''}`
@@ -490,7 +505,7 @@ export class McpManager {
             },
             risk: 'mcp',
             summarize: (args) => `${conn.config.name} 提示 ${String(args.action ?? 'list')}`,
-            execute: async (args) => {
+            execute: async (args, context) => {
               try {
                 if (String(args.action) === 'get') {
                   const promptName = typeof args.name === 'string' ? args.name : ''
@@ -499,10 +514,14 @@ export class McpManager {
                     args.arguments && typeof args.arguments === 'object'
                       ? (args.arguments as Record<string, string>)
                       : {}
-                  const result = await client.getPrompt({
-                    name: promptName,
-                    arguments: promptArguments
-                  })
+                  const result = await withTimeout(
+                    client.getPrompt(
+                      { name: promptName, arguments: promptArguments },
+                      { signal: context.signal }
+                    ),
+                    30_000,
+                    'MCP 提示获取'
+                  )
                   const lines = (result.messages ?? []).map((message) => {
                     const content = message.content as unknown
                     if (content && typeof content === 'object' && 'text' in content) {
@@ -512,7 +531,11 @@ export class McpManager {
                   })
                   return { output: lines.join('\n\n') || '(提示没有返回内容)' }
                 }
-                const listedPrompts = await client.listPrompts()
+const listedPrompts = await withTimeout(
+                  client.listPrompts(undefined, { signal: context.signal }),
+                  20_000,
+                  'MCP 提示列表加载'
+                )
                 const lines = (listedPrompts.prompts ?? []).map(
                   (prompt) =>
                     `- ${prompt.name}${prompt.description ? `：${prompt.description}` : ''}`

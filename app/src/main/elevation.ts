@@ -1,5 +1,5 @@
 import { app, dialog, shell } from 'electron'
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
@@ -101,7 +101,7 @@ function whoamiGroups(): string {
   } catch {
     groupsOutput = ''
   }
-  return groupsOutput
+return groupsOutput || ''
 }
 
 export function integrityLevel(): 'low' | 'medium' | 'high' | 'unknown' {
@@ -133,7 +133,7 @@ export async function canWriteDirectory(dir: string): Promise<boolean> {
   }
 }
 
-export function relaunchElevated(): boolean {
+export async function relaunchElevated(): Promise<boolean> {
   const quote = (value: string): string => `'${value.replace(/'/g, "''")}'`
   const projectRoot = app.getAppPath()
   const devLauncher = join(projectRoot, '启动开发版.bat')
@@ -163,13 +163,19 @@ export function relaunchElevated(): boolean {
   markElevationAttempt()
   elevationLog(`relaunch: ${command}`)
   try {
-    // Blocks until the UAC prompt is answered; non-zero means the user declined.
-    const output = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', command],
-      { encoding: 'utf8', windowsHide: true, timeout: 60_000 }
-    )
-    elevationLog(`relaunch spawned ok: ${String(output).trim().slice(0, 300)}`)
+    // Resolves when the UAC prompt is answered; non-zero means the user declined.
+    const output = await new Promise<string>((resolve, reject) => {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', command],
+        { encoding: 'utf8', windowsHide: true, timeout: 60_000 },
+        (error, stdout) => {
+          if (error) reject(error)
+          else resolve(String(stdout ?? ''))
+        }
+      )
+    })
+    elevationLog(`relaunch spawned ok: ${output.trim().slice(0, 300)}`)
     return true
   } catch (error) {
     elevationLog(`relaunch failed/declined: ${String(error).slice(0, 500)}`)
@@ -222,7 +228,7 @@ export async function ensureWritableOrElevate(target: string, label: string): Pr
       openSecurityCenter()
       return true
     }
-    if (choice === 1 && relaunchElevated()) {
+    if (choice === 1 && (await relaunchElevated())) {
       app.quit()
       return false
     }

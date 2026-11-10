@@ -15,10 +15,11 @@ export function dataDir(): string {
   if (cached) return cached
 
   const override = process.env.HQ_DATA_DIR?.trim()
-  cached = override
+  const dir = override
     ? resolve(override)
     : join(app.isPackaged ? app.getPath('userData') : app.getAppPath(), 'data')
 
-  mkdirSync(cached, { recursive: true })
-  return cached
+  mkdirSync(dir, { recursive: true })
+  cached = dir
+  return dir
 }

@@ -13,6 +13,14 @@ const MAX_OUTPUT = 200_000
 const SYNTHETIC_INPUT_RE = /(\bmouse_event\b|\bkeybd_event\b|\bSendInput\b|\bSetCursorPos\b|\bBlockInput\b)/i
 const SCRIPT_OCR_RE = /(Windows\.Media\.Ocr|\bOcrEngine\b|\btesseract\b|osd\.traineddata)/i
 
+/** System-level commands that must still be confirmed in auto mode. */
+const SYSTEM_COMMAND_RE =
+  /(\bformat\b|\bdiskpart\b|\bshutdown\b|\breg\s+(add|delete|import)\b|\bnet\s+(user|localgroup)\b|\bsc\s+(config|delete|create)\b|\bSet-ExecutionPolicy\b|\bbcdedit\b|\bicacls\b|\btakeown\b|\bRemove-Item\b[^\n]*\b(C:\\Windows|System32)\b|\bStart-Process\b[^\n]*-Verb\s+RunAs\b)/i
+
+export function isDangerousCommand(command: string): boolean {
+  return SYSTEM_COMMAND_RE.test(command)
+}
+
 /** 命令是否在“重造”桌面自动化能力；返回给模型的纠正提示。 */
 export function desktopAutomationHint(command: string): string | null {
   if (SYNTHETIC_INPUT_RE.test(command)) {
@@ -61,6 +69,7 @@ export const runCommandTool: ToolDefinition = {
   name: 'run_command',
   displayName: '运行命令',
   risk: 'exec',
+  confirmInAutoWhen: (args) => isDangerousCommand(stringArg(args, 'command')),
   description:
     '在本机 PowerShell 中执行命令，工作目录默认为工作区。适合安装依赖、构建、运行测试、Git 操作等。命令会实时返回输出；用户会看到并确认命令内容。不要执行删除系统文件、修改系统设置或泄露密钥的操作。',
   inputSchema: {

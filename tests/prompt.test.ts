@@ -44,6 +44,9 @@ describe('DSH-aligned system prompt', () => {
     expect(prompt).toContain('screen_click_target(target="发送按钮")')
     expect(prompt).toContain('`scope="screen"`')
     expect(prompt).toContain('window_focus(title="QQ")')
+    expect(prompt).toContain('window_restore(process="QQ", launch=true)')
+    expect(prompt).toContain('同一个工具连续两次结果相同就换策略')
+    expect(prompt).toContain('发送后确认消息气泡')
   })
 
   it('names the real tool surface and Windows-specific rules', () => {

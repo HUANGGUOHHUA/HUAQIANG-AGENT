@@ -29,6 +29,7 @@ import type {
 import type { SettingsTab } from './components/SettingsModal'
 import type { LiveMessage, ToastMessage } from './types'
 import { cn, deriveTitle, isImagePath, isTextPreviewPath, stripIpcError, uid } from './lib/utils'
+import { toSaveInput } from './lib/settings-form'
 import { createAgentEventHandler } from './lib/agent-events'
 import { compactMessages, parseSlashCommand, sessionMarkdown } from './lib/slash-commands'
 import { createZipBytes } from './lib/zip'
@@ -67,29 +68,6 @@ function createSession(workspace?: string): ChatSession {
   }
 }
 
-function toSaveInput(settings: UiSettings, overrides: Partial<SettingsSaveInput> = {}): SettingsSaveInput {
-  return {
-    profiles: settings.profiles.map((profile) => ({
-      id: profile.id,
-      name: profile.name,
-      provider: profile.provider,
-      baseUrl: profile.baseUrl,
-      model: profile.model,
-      contextWindow: profile.contextWindow,
-      temperature: profile.temperature,
-      maxTokens: profile.maxTokens
-    })),
-    activeProfileId: settings.activeProfileId,
-    workspace: settings.workspace,
-    elevateOnStart: settings.elevateOnStart,
-    agentElevated: settings.agentElevated,
-    approvalMode: settings.approvalMode,
-    maxSteps: settings.maxSteps,
-    mcpServers: settings.mcpServers,
-    systemPromptExtra: settings.systemPromptExtra,
-    ...overrides
-  }
-}
 
 function Toast({
   toast,
@@ -150,10 +128,13 @@ export default function App(): React.JSX.Element {
   const liveFlushTimer = useRef<number | null>(null)
   const toastTimer = useRef<number | null>(null)
   const submitRef = useRef<
-    (text: string, runAttachments: AttachmentPayload[]) => void
-  >(() => undefined)
+    (text: string, runAttachments: AttachmentPayload[], skipAutoCompact?: boolean) => boolean
+  >(() => false)
   const queueBusyRef = useRef(false)
   const autoCompactLockRef = useRef(false)
+  const sessionLoadSeqRef = useRef(0)
+  const sessionSelectChainRef = useRef<Promise<void>>(Promise.resolve())
+  const mcpRefreshTimersRef = useRef<number[]>([])
 
   const showToast = useCallback((type: ToastMessage['type'], message: string): void => {
     const id = uid()
@@ -479,8 +460,14 @@ export default function App(): React.JSX.Element {
   // collide when adding or removing.
   const attachmentKeyOf = (item: AttachmentPayload): string => item.id ?? item.path
 
+  const attachmentEpochRef = useRef(0)
+  const attachmentsRef = useRef<AttachmentPayload[]>([])
+  useEffect(() => {
+    attachmentsRef.current = attachments
+  }, [attachments])
+
   const addAttachments = (incoming: AttachmentPayload[]): number => {
-    const current = attachments
+    const current = attachmentsRef.current
     const next = [...current]
     let added = 0
     let imageChars = attachmentsImageChars(current)
@@ -506,8 +493,10 @@ export default function App(): React.JSX.Element {
   }
 
   const pickAttachments = async (): Promise<void> => {
+    const epoch = attachmentEpochRef.current
     try {
       const picked = await window.hq.pickAttachments()
+      if (epoch !== attachmentEpochRef.current) return
       if (!picked.length) return
       const added = addAttachments(picked)
       showToast(
@@ -521,8 +510,10 @@ export default function App(): React.JSX.Element {
 
   const pasteFromClipboard = async (files: File[]): Promise<void> => {
     if (!files.length) return
+    const epoch = attachmentEpochRef.current
     try {
       const items = await filesToAttachments(files)
+      if (epoch !== attachmentEpochRef.current) return
       if (!items.length) {
         showToast('error', '粘贴的内容无法识别为图片或文本文件')
         return
@@ -539,6 +530,7 @@ export default function App(): React.JSX.Element {
 
   const dropFiles = async (files: File[]): Promise<void> => {
     if (!files.length) return
+    const epoch = attachmentEpochRef.current
     const paths: string[] = []
     const blobs: File[] = []
     for (const file of files) {
@@ -551,28 +543,34 @@ export default function App(): React.JSX.Element {
       if (path) paths.push(path)
       else blobs.push(file)
     }
+    const incoming: AttachmentPayload[] = []
+    let errors: string[] = []
     if (paths.length > 0) {
       try {
-        const { attachments: dropped, errors } = await window.hq.readDroppedAttachments(paths)
-        const prepared = await Promise.all(dropped.map(shrinkImageAttachment))
-        const added = addAttachments(prepared)
-        if (added > 0) {
-          showToast('success', `已附加 ${added} 个文件`)
-        } else if (errors.length > 0) {
-          showToast('error', `无法读取：${errors[0]}`)
-        } else if (prepared.length > 0) {
-          showToast('info', '这些文件已在附件里，或附件已满 8 个')
-        }
+        const result = await window.hq.readDroppedAttachments(paths)
+        const prepared = await Promise.all(result.attachments.map(shrinkImageAttachment))
+        if (epoch !== attachmentEpochRef.current) return
+        incoming.push(...prepared)
+        errors = result.errors
       } catch (error) {
         showToast('error', stripIpcError(String(error)))
       }
     }
     if (blobs.length > 0) {
-      const items = await filesToAttachments(blobs)
-      if (items.length) {
-        const added = addAttachments(items)
-        if (added > 0) showToast('success', `已附加 ${added} 个文件`)
-      }
+      const prepared = await filesToAttachments(blobs)
+      if (epoch !== attachmentEpochRef.current) return
+      incoming.push(...prepared)
+    }
+    if (!incoming.length) {
+      if (errors.length > 0) showToast('error', `无法读取：${errors[0]}`)
+      return
+    }
+    if (epoch !== attachmentEpochRef.current) return
+    const added = addAttachments(incoming)
+    if (added > 0) {
+      showToast('success', `已附加 ${added} 个文件`)
+    } else {
+      showToast('info', '这些文件已在附件里，或附件已满 8 个')
     }
   }
 
@@ -932,12 +930,12 @@ export default function App(): React.JSX.Element {
     text: string,
     runAttachments: AttachmentPayload[],
     skipAutoCompact = false
-  ): void => {
-    if (!settings) return
+  ): boolean => {
+    if (!settings) return false
     if (!activeProfile || !activeProfile.baseUrl.trim() || !activeProfile.model.trim()) {
       showToast('info', '请先在设置中填写 Base URL 并读取或填写 Model ID')
       openSettings('model')
-      return
+      return false
     }
     if (
       !skipAutoCompact &&
@@ -957,7 +955,7 @@ export default function App(): React.JSX.Element {
           autoCompactLockRef.current = false
           submitMessage(text, runAttachments, true)
         })
-      return
+      return true
     }
     const userMessage: AppMessage = {
       id: uid(),
@@ -980,6 +978,7 @@ export default function App(): React.JSX.Element {
       updatedAt: Date.now()
     }
     beginRun(next, runAttachments)
+    return true
   }
 
   submitRef.current = submitMessage
@@ -1014,11 +1013,21 @@ export default function App(): React.JSX.Element {
     queueBusyRef.current = true
     const first = queue[0]
     setQueue((current) => current.slice(1))
-    submitRef.current(first.text, first.attachments)
+    const accepted = submitRef.current(first.text, first.attachments)
     window.setTimeout(() => {
+      if (!accepted) {
+        setQueue((current) => [first, ...current])
+        showToast('info', '排队消息暂未发送，请检查模型配置')
+        window.setTimeout(() => {
+          queueBusyRef.current = false
+          setQueue((current) => [...current])
+        }, 5000)
+        return
+      }
       queueBusyRef.current = false
+      setQueue((current) => [...current])
     }, 0)
-  }, [running, compactBusy, settings, queue])
+  }, [running, compactBusy, settings, queue, showToast])
 
   const retryLast = (): void => {
     if (running || compactBusy) {
@@ -1043,7 +1052,7 @@ export default function App(): React.JSX.Element {
       lastChanges: undefined,
       updatedAt: Date.now()
     }
-    beginRun(next, [])
+    beginRun(next, messages[index]?.attachments ?? [])
   }
 
   const stopRun = (): void => {
@@ -1079,6 +1088,7 @@ export default function App(): React.JSX.Element {
   }
 
   const newChat = (): void => {
+    attachmentEpochRef.current += 1
     if (running || compactBusy) {
       showToast('info', running ? '请先停止当前任务' : '正在压缩上下文，请稍候')
       return
@@ -1095,20 +1105,23 @@ export default function App(): React.JSX.Element {
     requestAnimationFrame(() => document.getElementById('composer-input')?.focus())
   }
 
-  const selectSession = async (id: string): Promise<void> => {
+  const doSelectSession = async (id: string, seq: number): Promise<void> => {
     if (running || compactBusy) {
       showToast('info', running ? '请先停止当前任务' : '正在压缩上下文，请稍候')
       return
     }
     if (id === activeId) return
+
     try {
       const loaded = await window.hq.loadSession(id)
+      if (seq !== sessionLoadSeqRef.current) return
       if (!loaded) {
         showToast('error', '会话不存在或已损坏')
         return
       }
       if (settings && loaded.workspace && loaded.workspace !== settings.workspace) {
         const updated = await saveSettings(toSaveInput(settings, { workspace: loaded.workspace }))
+        if (seq !== sessionLoadSeqRef.current) return
         if (!updated) return
       }
       commitSession(loaded)
@@ -1121,6 +1134,17 @@ export default function App(): React.JSX.Element {
     } catch (error) {
       showToast('error', stripIpcError(String(error)))
     }
+  }
+
+  const selectSession = (id: string): Promise<void> => {
+    attachmentEpochRef.current += 1
+    const seq = ++sessionLoadSeqRef.current
+    const task = sessionSelectChainRef.current.then(
+      () => doSelectSession(id, seq),
+      () => doSelectSession(id, seq)
+    )
+    sessionSelectChainRef.current = task.catch(() => undefined)
+    return task
   }
 
   const deleteSession = async (id: string): Promise<void> => {
@@ -1178,13 +1202,23 @@ export default function App(): React.JSX.Element {
     setSettings(updated)
     setSettingsOpen(false)
     showToast('success', '设置已保存')
-    window.setTimeout(() => {
-      void window.hq.mcpStatuses().then(setMcpStatuses).catch(() => undefined)
-    }, 700)
-    window.setTimeout(() => {
-      void window.hq.mcpStatuses().then(setMcpStatuses).catch(() => undefined)
-    }, 2800)
+    for (const timer of mcpRefreshTimersRef.current) window.clearTimeout(timer)
+    mcpRefreshTimersRef.current = [
+      window.setTimeout(() => {
+        void window.hq.mcpStatuses().then(setMcpStatuses).catch(() => undefined)
+      }, 700),
+      window.setTimeout(() => {
+        void window.hq.mcpStatuses().then(setMcpStatuses).catch(() => undefined)
+      }, 2800)
+    ]
   }
+
+  useEffect(
+    () => () => {
+      for (const timer of mcpRefreshTimersRef.current) window.clearTimeout(timer)
+    },
+    []
+  )
 
   const refreshMcp = async (): Promise<void> => {
     showToast('info', '正在重新连接 MCP 服务…')
@@ -1197,22 +1231,25 @@ export default function App(): React.JSX.Element {
     }
   }
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      const mod = event.ctrlKey || event.metaKey
-      if (!mod) return
-      if (event.key.toLowerCase() === 'n' && !settingsOpen && !approval) {
-        event.preventDefault()
-        newChat()
-      }
-      if (event.key === ',' && !settingsOpen) {
-        event.preventDefault()
-        openSettings('model')
-      }
+  const shortcutHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined)
+  shortcutHandlerRef.current = (event: KeyboardEvent): void => {
+    const mod = event.ctrlKey || event.metaKey
+    if (!mod) return
+    if (event.key.toLowerCase() === 'n' && !settingsOpen && !approval) {
+      event.preventDefault()
+      newChat()
     }
+    if (event.key === ',' && !settingsOpen) {
+      event.preventDefault()
+      openSettings('model')
+    }
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => shortcutHandlerRef.current(event)
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  })
+  }, [])
 
   if (booting) {
     return (

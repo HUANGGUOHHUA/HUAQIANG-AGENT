@@ -154,9 +154,14 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+let quitting = false
+app.on('before-quit', (event) => {
+  if (quitting) return
+  quitting = true
+  event.preventDefault()
   abortAllRuns()
   state.worker?.close()
-  void state.mcp?.closeAll()
-  void state.builtinMcp?.close()
+  Promise.all([state.mcp?.closeAll(), state.builtinMcp?.close()])
+    .catch(() => undefined)
+    .finally(() => app.quit())
 })

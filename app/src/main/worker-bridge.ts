@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
+import { join } from 'node:path'
 import type { ToolDefinition, ToolResult } from './agent/tools/types'
 
 const EXECUTE_TIMEOUT_MS = 15 * 60_000
@@ -119,6 +120,7 @@ export class AgentWorkerBridge {
           this.authorized = true
           this.ready = true
           this.log('worker authorized')
+          this.cleanupLaunchScript()
         } else {
           this.log('worker token mismatch')
           this.socket?.destroy()
@@ -144,18 +146,49 @@ export class AgentWorkerBridge {
     }
   }
 
+  private launchScriptPath: string | null = null
+
+  private cleanupOldLaunchScripts(): void {
+    try {
+      for (const name of readdirSync(this.options.scriptDir)) {
+        if (!name.startsWith('worker-launch-') || !name.endsWith('.ps1')) continue
+        const full = join(this.options.scriptDir, name)
+        try {
+          if (Date.now() - statSync(full).mtimeMs > 10 * 60_000) unlinkSync(full)
+        } catch {
+          // Ignore files that cannot be removed.
+        }
+      }
+    } catch {
+      // Ignore a missing script directory.
+    }
+  }
+
+  private cleanupLaunchScript(): void {
+    if (!this.launchScriptPath) return
+    try {
+      unlinkSync(this.launchScriptPath)
+    } catch {
+      // The elevated PowerShell process may still hold the file.
+    }
+    this.launchScriptPath = null
+  }
+
   private spawn(): void {
     const quote = (value: string): string => `'${value.replace(/'/g, "''")}'`
     // UAC elevation does not inherit the parent environment, so
     // ELECTRON_RUN_AS_NODE must be set inside the elevated launch script.
-    const scriptPath = `${this.options.scriptDir}\\worker-launch-${Date.now()}.ps1`
+    this.cleanupOldLaunchScripts()
+    const scriptPath = join(this.options.scriptDir, `worker-launch-${randomUUID()}.ps1`)
+    this.launchScriptPath = scriptPath
     const marker = this.options.logFile
     const launchScript = [
       "$ErrorActionPreference = 'Stop'",
       `"launch $(Get-Date -Format o)" | Out-File -FilePath '${marker}' -Append -Encoding utf8`,
       'try {',
       "  $env:ELECTRON_RUN_AS_NODE = '1'",
-      `  & '${this.options.execPath}' '${this.options.workerScript}' '--pipe=${this.pipeName}' '--token=${this.token}' '--python=${this.options.pythonPath}' '--log=${this.options.logFile}'`,
+      `  $env:HQ_WORKER_TOKEN = '${this.token.replace(/'/g, "''")}'`,
+      `  & '${this.options.execPath}' '${this.options.workerScript}' '--pipe=${this.pipeName}' '--python=${this.options.pythonPath}' '--log=${this.options.logFile}'`,
       `  "worker exited $LASTEXITCODE $(Get-Date -Format o)" | Out-File -FilePath '${marker}' -Append -Encoding utf8`,
       '} catch {',
       `  "worker launch error: $_" | Out-File -FilePath '${marker}' -Append -Encoding utf8`,
@@ -200,12 +233,22 @@ export class AgentWorkerBridge {
     }
     const id = randomUUID()
     return new Promise<ToolResult>((resolve, reject) => {
+      if (context.signal.aborted) {
+        reject(new Error('操作已中止'))
+        return
+      }
       const onAbort = (): void => {
         try {
           this.socket?.write(`${JSON.stringify({ type: 'cancel', id })}\n`)
         } catch {
           // The socket may be closed already.
         }
+        const call = this.pending.get(id)
+        if (!call) return
+        clearTimeout(call.timer)
+        this.pending.delete(id)
+        call.cleanup()
+        call.reject(new Error('操作已中止'))
       }
       context.signal.addEventListener('abort', onAbort, { once: true })
       const timer = setTimeout(() => {
@@ -265,6 +308,7 @@ export class AgentWorkerBridge {
 
   close(): void {
     this.ready = false
+    this.cleanupLaunchScript()
     try {
       this.socket?.destroy()
     } catch {

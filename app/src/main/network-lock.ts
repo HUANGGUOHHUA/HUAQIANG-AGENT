@@ -2,7 +2,7 @@ import type { ToolDefinition } from './agent/tools/types'
 import { NETWORK_LOCKED_ERROR, state } from './state'
 
 const NETWORK_COMMAND_RE =
-  /(https?:\/\/|ftp:\/\/|\bcurl\b|\bwget\b|Invoke-WebRequest|Invoke-RestMethod|Start-BitsTransfer|Test-NetConnection|Resolve-DnsName|\bnslookup\b|\bping\b|\bssh\b|\bscp\b|\bftp\b|git\s+clone|npm\s+(install|i)\b|pnpm\s+(add|install)\b|yarn\s+add\b|pip\s+install|winget\s+install|choco\s+install|\bpython\b[^\n]*-m\s+pip|node\s+[^\n]*fetch)/i
+  /(https?:\/\/|ftp:\/\/|\bcurl\b|\bwget\b|Invoke-WebRequest|Invoke-RestMethod|Start-BitsTransfer|Test-NetConnection|Resolve-DnsName|\bnslookup\b|\bping\b|\bssh\b|\bscp\b|\bftp\b|\bbitsadmin\b|\bcertutil\b[^\n]*-urlcache\b|\bmshta\b|\brundll32\b[^\n]*url\.dll|\bexplorer(\.exe)?\b[^\n]*https?:\/\/|git\s+(?:pull|push|fetch|remote\s+update)|\bnpx\b|pnpm\s+dlx|\biwr\b|\birm\b|\btnc\b|WebClient|HttpClient|-EncodedCommand|git\s+clone|npm\s+(install|i)\b|pnpm\s+(add|install)\b|yarn\s+add\b|pip\s+install|winget\s+install|choco\s+install|\bpython\b[^\n]*-m\s+pip|node\s+[^\n]*fetch)/i
 
 /**
  * 断网锁：模型 API 不经过这里，但网页抓取、下载类命令一律拒绝。

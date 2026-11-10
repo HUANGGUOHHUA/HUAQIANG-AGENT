@@ -31,4 +31,21 @@ describe('SSE idle timeout', () => {
       value: { event: 'message', data: '{"ok":true}' }
     })
   })
+
+  it('parses CRLF events when a chunk boundary splits the CR and LF', async () => {
+    const chunks = ['data: {"a":1}\r', '\n\r', '\n', 'data: {"b":2}\r\n\r\n']
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder()
+          for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+          controller.close()
+        }
+      }),
+      { headers: { 'Content-Type': 'text/event-stream' } }
+    )
+    const events: unknown[] = []
+    for await (const event of readSse(response, 1_000)) events.push(JSON.parse(event.data))
+    expect(events).toEqual([{ a: 1 }, { b: 2 }])
+  })
 })

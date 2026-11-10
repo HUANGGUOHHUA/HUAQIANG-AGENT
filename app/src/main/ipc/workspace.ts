@@ -1,4 +1,5 @@
 import { dialog, ipcMain } from 'electron'
+import { handleTrusted } from './trust'
 import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import type { AttachmentPayload } from '../../shared/types'
@@ -11,7 +12,7 @@ const MAX_ATTACHMENT_BATCH_BYTES = 48 * 1024 * 1024
 
 /** 工作区、文件打开方式和附件读取。 */
 export function registerWorkspaceIpc(): void {
-  ipcMain.handle('workspace:choose', async () => {
+  handleTrusted('workspace:choose', async () => {
     const win = state.mainWindow
     if (!win) return null
     const result = await dialog.showOpenDialog(win, {
@@ -23,12 +24,12 @@ export function registerWorkspaceIpc(): void {
     return result.filePaths[0]
   })
 
-  ipcMain.handle('workspace:list', (_event, path?: string) => state.workspace.list(path))
-  ipcMain.handle('workspace:read', (_event, path: string) => state.workspace.read(path))
-  ipcMain.handle('workspace:readAsset', (_event, path: string) => state.workspace.readAsset(path))
-  ipcMain.handle('workspace:extract', (_event, path: string) => state.workspace.extract(path))
-  ipcMain.handle('workspace:ocr', (_event, path: string) => state.workspace.ocr(path))
-  ipcMain.handle('workspace:write', (_event, path: string, content: string) =>
+  handleTrusted('workspace:list', (_event, path?: string) => state.workspace.list(path))
+  handleTrusted('workspace:read', (_event, path: string) => state.workspace.read(path))
+  handleTrusted('workspace:readAsset', (_event, path: string) => state.workspace.readAsset(path))
+  handleTrusted('workspace:extract', (_event, path: string) => state.workspace.extract(path))
+  handleTrusted('workspace:ocr', (_event, path: string) => state.workspace.ocr(path))
+  handleTrusted('workspace:write', (_event, path: string, content: string) =>
     state.workspace.write(path, content)
   )
 
@@ -62,10 +63,10 @@ async function revealInExplorer(path?: string): Promise<void> {
 }
 
 function registerOpenHandlers(): void {
-  ipcMain.handle('workspace:reveal', async (_event, path?: string) => {
+  handleTrusted('workspace:reveal', async (_event, path?: string) => {
     await revealInExplorer(path)
   })
-  ipcMain.handle('workspace:openWith', async (_event, path?: string) => {
+  handleTrusted('workspace:openWith', async (_event, path?: string) => {
     elevationLog(`openWith: ${String(path)}`)
     try {
       await state.workspace.openWith(path)
@@ -75,7 +76,7 @@ function registerOpenHandlers(): void {
       throw error
     }
   })
-  ipcMain.handle('workspace:openOffice', async (_event, path?: string) => {
+  handleTrusted('workspace:openOffice', async (_event, path?: string) => {
     elevationLog(`openOffice: ${String(path)}`)
     try {
       await state.workspace.openOffice(path)
@@ -85,13 +86,13 @@ function registerOpenHandlers(): void {
       throw error
     }
   })
-  ipcMain.handle('workspace:open', async (_event, path?: string) => {
+  handleTrusted('workspace:open', async (_event, path?: string) => {
     await state.workspace.open(path)
   })
 }
 
 function registerAttachmentIpc(): void {
-  ipcMain.handle('attachments:pick', async (): Promise<AttachmentPayload[]> => {
+  handleTrusted('attachments:pick', async (): Promise<AttachmentPayload[]> => {
     const options: Parameters<typeof dialog.showOpenDialog>[0] = {
       title: '选择要附加的文件',
       properties: ['openFile', 'multiSelections'],
@@ -117,7 +118,10 @@ function registerAttachmentIpc(): void {
   // Files dropped from Explorer (any directory). Each read is bounded by
   // readPickedAttachment (20MB cap, text/PDF truncation), batches are capped
   // at 8, and nothing is cached in the main process afterwards.
-  ipcMain.handle('attachments:readPaths', async (_event, paths: unknown) => {
+  handleTrusted('attachments:readPaths', async (event, paths: unknown) => {
+    if (event.sender.id !== state.mainWindow?.webContents.id) {
+      return { attachments: [], errors: ['来源不受信任'] }
+    }
     if (!Array.isArray(paths)) return { attachments: [], errors: ['参数不正确'] }
     const unique = [
       ...new Set(

@@ -1,10 +1,17 @@
-import { readFile, unlink } from 'node:fs/promises'
+import { readFile, stat, unlink } from 'node:fs/promises'
 import type { BrowserWindow } from 'electron'
+import { resolveWithinRoot } from '../../../security/paths'
 import { boolArg, numberArg, stringArg, ToolError, truncate } from '../types'
 import type { ToolDefinition } from '../types'
 import { POST_MOUSE_DELAY_MS, waitFor } from './powershell'
-import { DesktopSession, linesInWindow, normalizeButton, type DesktopToolOptions } from './session'
-import { buildVisualPrompt, parseVisualAction } from './visual'
+import {
+  DesktopSession,
+  linesInWindow,
+  normalizeButton,
+  type DesktopToolOptions,
+  type VisionCrop
+} from './session'
+import { buildVisualPrompt, parseVisualAction, type ScreenBounds } from './visual'
 
 /** 桌面控制工具：全部通过 DesktopSession 执行，坐标均为虚拟桌面物理像素。 */
 export function createDesktopTools(
@@ -12,6 +19,25 @@ export function createDesktopTools(
   options: DesktopToolOptions = {}
 ): ToolDefinition[] {
   const session = new DesktopSession(getWindow, options)
+
+  const resolveVisionCrop = (
+    args: Record<string, unknown>,
+    shot: { bounds: ScreenBounds; foreground?: ScreenBounds | null }
+  ): ScreenBounds => {
+    const width = numberArg(args, 'region_width', 0, 0, 100_000)
+    const height = numberArg(args, 'region_height', 0, 0, 100_000)
+    if (width > 0 && height > 0) {
+      return {
+        x: numberArg(args, 'region_x', 0, -100_000, 100_000),
+        y: numberArg(args, 'region_y', 0, -100_000, 100_000),
+        width,
+        height
+      }
+    }
+    const scope = stringArg(args, 'scope', { fallback: 'window' })
+    return scope === 'screen' ? shot.bounds : (shot.foreground ?? shot.bounds)
+  }
+
   return [
     {
       name: 'screen_ocr',
@@ -86,7 +112,8 @@ export function createDesktopTools(
               scopeNote += '（窗口内没识别到文字，已返回全屏结果）'
             }
           } else if (scope === 'screen' || region) {
-            scopeNote = '识别范围：整个虚拟桌面'
+            scopeNote =
+              '识别范围：整个虚拟桌面（坐标是虚拟桌面绝对坐标；点击请用 screen_click 或 screen_click_target，不要按视觉缩放图坐标手动 mouse_click）'
           }
 
           if (!withBoxes) {
@@ -117,14 +144,23 @@ export function createDesktopTools(
       displayName: '视觉识别桌面',
       risk: 'network',
       description:
-        '截取整个虚拟桌面，直接交给当前支持图片输入的模型做视觉识别。用于需要理解桌面布局、窗口、图标、图片或自绘界面时；普通文字用 screen_ocr，需要点击就用 screen_click_target。',
+        '截取当前前台窗口并缩放到适合视觉模型的尺寸，再交给支持图片输入的模型识别。默认只看前台窗口；找桌面图标、任务栏或托盘时传 scope="screen"，可用 region_* 限定区域（例如左列图标区），避免整屏缩小后看不清。多屏不会拼成一张巨图，坐标和文字更准。用于理解窗口布局、图标、图片或自绘界面；普通文字用 screen_ocr，需要点击就用 screen_click_target。',
       inputSchema: {
         type: 'object',
         properties: {
           question: {
             type: 'string',
             description: '希望模型从桌面截图中识别的目标或回答的问题'
-          }
+          },
+          scope: {
+            type: 'string',
+            enum: ['window', 'screen'],
+            description: '默认 window 只看前台窗口；桌面图标、任务栏、托盘用 screen'
+          },
+          region_x: { type: 'number', description: '可选，只识别区域的 X 坐标（虚拟桌面物理像素）' },
+          region_y: { type: 'number', description: '可选，只识别区域的 Y 坐标' },
+          region_width: { type: 'number', description: '可选，只识别区域的宽度' },
+          region_height: { type: 'number', description: '可选，只识别区域的高度' }
         },
         required: ['question'],
         additionalProperties: false
@@ -134,17 +170,27 @@ export function createDesktopTools(
         if (!options.analyzeImage) throw new ToolError('当前没有可用的桌面视觉分析器')
         const question = stringArg(args, 'question', { required: true, max: 2000 })
         if (!question.trim()) throw new ToolError('question 不能为空')
-        const shot = await session.capture()
+        const shot = await session.capture(false, true)
+        let vision: VisionCrop | null = null
         try {
-          const bytes = await readFile(shot.path)
+          const mappedVision = await session.cropWindow(
+            shot.path,
+            shot.bounds,
+            resolveVisionCrop(args, shot)
+          )
+          vision = mappedVision
+          const bytes = await readFile(mappedVision.path)
           const text = await options.analyzeImage(question, {
             dataUrl: `data:image/png;base64,${bytes.toString('base64')}`,
             url: 'screen://virtual-desktop',
             title: '桌面截图'
           })
-          return { output: text || '（模型没有返回视觉识别结果）' }
+          return {
+            output: `${text || '（模型没有返回视觉识别结果）'}\n\n[视觉输入：${mappedVision.width}x${mappedVision.height}，屏幕原点 (${mappedVision.originX}, ${mappedVision.originY})，缩放 ${mappedVision.scale.toFixed(2)}。需要点击时请使用 screen_click_target 或 screen_act，不要用这里的图片坐标手动 mouse_click。]`
+          }
         } finally {
           await unlink(shot.path).catch(() => undefined)
+          if (vision) await unlink(vision.path).catch(() => undefined)
         }
       }
     },
@@ -153,7 +199,7 @@ export function createDesktopTools(
       displayName: '视觉操作桌面',
       risk: 'exec',
       description:
-        '通用视觉操作：截屏交给当前视觉模型，模型返回一个 JSON 动作（click/double_click/right_click/move/drag/type/paste_text/paste_file/press/scroll/wait/done），程序执行该动作。适合任何没有 UIA/DOM 的桌面程序、聊天工具、远程桌面、安装器和设置面板；不需要为每个应用写专用代码。每次只执行一个动作，下一步重新截图。',
+        '通用视觉操作：自动截取前台窗口并缩放到适合视觉模型的尺寸，模型返回一个 JSON 动作（click/double_click/right_click/move/drag/type/paste_text/paste_file/press/scroll/wait/done），程序按截图比例换算回屏幕坐标并执行。适合任何没有 UIA/DOM 的桌面程序、聊天工具、远程桌面、安装器和设置面板；不需要为每个应用写专用代码。每次只执行一个动作，下一步重新截图。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -170,10 +216,17 @@ export function createDesktopTools(
         if (!options.analyzeImage) throw new ToolError('当前没有可用的视觉分析器')
         const instruction = stringArg(args, 'instruction', { required: true, max: 2000 }).trim()
         if (!instruction) throw new ToolError('instruction 不能为空')
-        const shot = await session.capture(true)
+        const shot = await session.capture(true, true)
+        let vision: VisionCrop | null = null
         try {
-          const bytes = await readFile(shot.path)
-          const raw = await options.analyzeImage(buildVisualPrompt(instruction, shot.bounds), {
+          vision = await session.cropWindow(shot.path, shot.bounds, shot.foreground ?? shot.bounds)
+          const bytes = await readFile(vision.path)
+          const imageBounds = { x: 0, y: 0, width: vision.width, height: vision.height }
+          const toScreenX = (value: number): number =>
+            Math.round(vision!.originX + value * vision!.scale)
+          const toScreenY = (value: number): number =>
+            Math.round(vision!.originY + value * vision!.scale)
+          const raw = await options.analyzeImage(buildVisualPrompt(instruction, imageBounds), {
             dataUrl: `data:image/png;base64,${bytes.toString('base64')}`,
             url: 'screen://visual-action',
             title: '桌面视觉操作'
@@ -187,16 +240,16 @@ export function createDesktopTools(
             return { output: `视觉操作等待 ${action.ms}ms` }
           }
           if (action.action === 'move') {
-            const x = Math.round(shot.bounds.x + action.x)
-            const y = Math.round(shot.bounds.y + action.y)
+            const x = toScreenX(action.x)
+            const y = toScreenY(action.y)
             await session.move(x, y, { signal: context.signal })
             return { output: `视觉操作移动 (${x}, ${y})` }
           }
           if (action.action === 'drag') {
-            const x = Math.round(shot.bounds.x + action.x)
-            const y = Math.round(shot.bounds.y + action.y)
-            const toX = Math.round(shot.bounds.x + action.toX)
-            const toY = Math.round(shot.bounds.y + action.toY)
+            const x = toScreenX(action.x)
+            const y = toScreenY(action.y)
+            const toX = toScreenX(action.toX)
+            const toY = toScreenY(action.toY)
             await session.drag(x, y, toX, toY, { signal: context.signal, label: '视觉拖拽' })
             return { output: `视觉操作拖拽 (${x}, ${y}) → (${toX}, ${toY})` }
           }
@@ -206,9 +259,16 @@ export function createDesktopTools(
             return { output: `视觉操作粘贴文字（${action.text.length} 字符）` }
           }
           if (action.action === 'paste_file') {
-            await session.pasteFiles(action.paths)
+            const safePaths: string[] = []
+            for (const path of action.paths) {
+              const resolved = await resolveWithinRoot(context.workspace, path)
+              const info = await stat(resolved).catch(() => null)
+              if (!info?.isFile()) throw new ToolError(`粘贴文件不存在或不可用：${path}`)
+              safePaths.push(resolved)
+            }
+            await session.pasteFiles(safePaths)
             await waitFor(POST_MOUSE_DELAY_MS, context.signal)
-            return { output: `视觉操作粘贴文件：${action.paths.join('、')}` }
+            return { output: `视觉操作粘贴文件：${safePaths.join('、')}` }
           }
           if (action.action === 'type') {
             const mode = await session.typeText(action.text)
@@ -224,8 +284,8 @@ export function createDesktopTools(
             return { output: `视觉操作按键 ${action.keys}` }
           }
           if (action.action === 'scroll') {
-            const x = Math.round(shot.bounds.x + (action.x ?? shot.bounds.width / 2))
-            const y = Math.round(shot.bounds.y + (action.y ?? shot.bounds.height / 2))
+            const x = toScreenX(action.x ?? vision!.width / 2)
+            const y = toScreenY(action.y ?? vision!.height / 2)
             await session.scroll(action.amount, { x, y }, context.signal)
             return { output: `视觉操作滚动 ${action.amount} 格` }
           }
@@ -239,8 +299,8 @@ export function createDesktopTools(
             clicks = action.clicks ?? 1
             button = action.button ?? 'left'
           }
-          const clickX = Math.round(shot.bounds.x + action.x)
-          const clickY = Math.round(shot.bounds.y + action.y)
+          const clickX = toScreenX(action.x)
+          const clickY = toScreenY(action.y)
           await session.click(clickX, clickY, {
             signal: context.signal,
             button,
@@ -253,6 +313,7 @@ export function createDesktopTools(
         } finally {
           shot.restore()
           await unlink(shot.path).catch(() => undefined)
+          if (vision) await unlink(vision.path).catch(() => undefined)
         }
       }
     },
@@ -285,7 +346,7 @@ export function createDesktopTools(
       displayName: '点击看到的控件',
       risk: 'exec',
       description:
-        '直接点击屏幕上看见的控件：截取当前桌面交给视觉模型，按描述（按钮文字、图标、头像、菜单项）找到位置并点下去，一步完成。QQ、微信、游戏等自绘界面用它。找不到时只返回说明，不会乱点。',
+        '直接点击屏幕上看见的控件：截取当前范围交给视觉模型，按描述（按钮文字、图标、头像、菜单项）找到位置并点下去，一步完成。默认只看前台窗口；找桌面图标、任务栏或托盘时传 scope="screen"，可用 region_* 限定区域（例如左列图标区），否则视觉模型看不到桌面。QQ、微信、游戏等自绘界面用它。找不到时只返回说明，不会乱点。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -294,7 +355,16 @@ export function createDesktopTools(
             description: '要点击的控件描述，例如“发送按钮”“张三的头像”“右上角关闭”'
           },
           button: { type: 'string', enum: ['left', 'right', 'middle'], description: '鼠标按键，默认 left' },
-          clicks: { type: 'number', description: '点击次数，1-3，默认 1' }
+          clicks: { type: 'number', description: '点击次数，1-3，默认 1' },
+          scope: {
+            type: 'string',
+            enum: ['window', 'screen'],
+            description: '默认 window 只看前台窗口；桌面图标、任务栏、托盘用 screen'
+          },
+          region_x: { type: 'number', description: '可选，只在指定区域查找（虚拟桌面物理像素）' },
+          region_y: { type: 'number', description: '可选，只在指定区域查找' },
+          region_width: { type: 'number', description: '可选，区域宽度' },
+          region_height: { type: 'number', description: '可选，区域高度' }
         },
         required: ['target'],
         additionalProperties: false
@@ -307,22 +377,11 @@ export function createDesktopTools(
         const target = stringArg(args, 'target', { required: true, max: 300 }).trim()
         if (!target) throw new ToolError('target 不能为空')
         const shot = await session.capture(true, true)
-        let cropPath: string | null = null
+        let vision: VisionCrop | null = null
         try {
-          const foreground = shot.foreground
-          // 只把前台窗口这块图交给视觉模型：图片小、目标唯一，坐标也更准。
-          const imageBounds = foreground
-            ? {
-                x: 0,
-                y: 0,
-                width: Math.min(foreground.width, shot.bounds.width),
-                height: Math.min(foreground.height, shot.bounds.height)
-              }
-            : shot.bounds
-          const imagePath = foreground
-            ? (cropPath = await session.cropWindow(shot.path, shot.bounds, foreground))
-            : shot.path
-          const bytes = await readFile(imagePath)
+          vision = await session.cropWindow(shot.path, shot.bounds, resolveVisionCrop(args, shot))
+          const imageBounds = { x: 0, y: 0, width: vision.width, height: vision.height }
+          const bytes = await readFile(vision.path)
           const raw = await options.analyzeImage(
             buildVisualPrompt(`点击「${target}」`, imageBounds),
             {
@@ -357,8 +416,8 @@ export function createDesktopTools(
                 `（${imageBounds.width}x${imageBounds.height}）。没有点击，请重试。`
             )
           }
-          const x = Math.round((foreground ? foreground.x : shot.bounds.x) + action.x)
-          const y = Math.round((foreground ? foreground.y : shot.bounds.y) + action.y)
+          const x = Math.round(vision.originX + action.x * vision.scale)
+          const y = Math.round(vision.originY + action.y * vision.scale)
           const clicks =
             action.action === 'double_click' ? 2 : numberArg(args, 'clicks', 1, 1, 3)
           const button =
@@ -371,11 +430,13 @@ export function createDesktopTools(
             clicks,
             label: `点击「${target}」`
           })
-          return { output: `已点击「${target}」(${x}, ${y})` }
+          return {
+            output: `已点击「${target}」(${x}, ${y})（视觉图片 ${vision.width}x${vision.height}，缩放 ${vision.scale}）`
+          }
         } finally {
           shot.restore()
           await unlink(shot.path).catch(() => undefined)
-          if (cropPath) await unlink(cropPath).catch(() => undefined)
+          if (vision) await unlink(vision.path).catch(() => undefined)
         }
       }
     },
@@ -384,7 +445,7 @@ export function createDesktopTools(
       displayName: '切换到窗口',
       risk: 'exec',
       description:
-        '按标题把窗口切到前台，并返回它的屏幕矩形（x/y/width/height）。标题包含匹配即可，例如 window_focus(title="QQ")。切换后配合 screen_ocr / screen_click_target 操作；不要自己写 SetForegroundWindow 脚本。',
+        '按标题把窗口切到前台；如果程序最小化到托盘，会尝试恢复它的隐藏窗口。返回屏幕矩形（x/y/width/height）。标题包含匹配即可，例如 window_focus(title="QQ")。切换后配合 screen_ocr / screen_click_target 操作；不要自己写 SetForegroundWindow 脚本。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -398,9 +459,50 @@ export function createDesktopTools(
         const title = stringArg(args, 'title', { required: true, max: 200 }).trim()
         if (!title) throw new ToolError('title 不能为空')
         const win = await session.focusWindow(title)
-        if (!win) throw new ToolError(`没有找到标题包含「${title}」的窗口`)
+        if (!win) {
+          throw new ToolError(
+            `没有找到标题包含「${title}」的窗口。目标程序可能最小化到托盘：请先用 run_command 启动它（例如 Start-Process QQ），或用 screen_click_target 点击托盘图标；不要反复重试 window_focus。`
+          )
+        }
         return {
           output: `已切到「${win.title}」：x=${win.x} y=${win.y} ${win.width}x${win.height}`
+        }
+      }
+    },
+    {
+      name: 'window_restore',
+      displayName: '命令行唤出窗口',
+      risk: 'exec',
+      description:
+        '用命令行按进程名恢复/启动窗口：枚举该进程所有顶层窗口（包括隐藏/托盘窗口）并 ShowWindow + 置前；找不到窗口时可用进程路径或开始菜单重新启动。QQ、微信等常驻托盘程序优先用它，比点托盘图标/悬浮小窗可靠。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          process: { type: 'string', description: '进程名，例如 QQ、WeChat、TIM' },
+          title: { type: 'string', description: '可选，窗口标题包含的文字' },
+          launch: { type: 'boolean', description: '找不到窗口时是否启动/重启进程，默认 true' },
+          wait_ms: { type: 'number', description: '启动后等待毫秒，默认 1200' }
+        },
+        required: ['process'],
+        additionalProperties: false
+      },
+      summarize: (args) => `命令行唤出 ${stringArg(args, 'process').slice(0, 40) || '?'}`,
+      execute: async (args) => {
+        const processName = stringArg(args, 'process', { required: true, max: 100 }).trim()
+        if (!/^[A-Za-z0-9._-]+$/.test(processName)) {
+          throw new ToolError('process 只支持进程名，例如 QQ、WeChat')
+        }
+        const title = stringArg(args, 'title', { fallback: '', max: 200 }).trim()
+        const launch = boolArg(args, 'launch', true)
+        const waitMs = numberArg(args, 'wait_ms', 1200, 0, 10_000)
+        const win = await session.restoreWindow(processName, title, launch, waitMs)
+        if (!win) {
+          throw new ToolError(
+            `命令行没有唤出「${processName}」的窗口。请确认进程名/安装路径，或让用户手动打开；不要改用视觉点托盘图标反复尝试。`
+          )
+        }
+        return {
+          output: `已用命令行唤出「${win.title}」：x=${win.x} y=${win.y} ${win.width}x${win.height}`
         }
       }
     },

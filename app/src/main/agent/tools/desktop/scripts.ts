@@ -427,6 +427,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 public static class HqForeground
 {
+    [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
@@ -435,6 +437,9 @@ public static class HqForeground
     public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 }
 '@
+try {
+  if (-not [HqForeground]::SetProcessDpiAwarenessContext([IntPtr](-4))) { [HqForeground]::SetProcessDPIAware() | Out-Null }
+} catch { [HqForeground]::SetProcessDPIAware() | Out-Null }
 $h = [HqForeground]::GetForegroundWindow()
 if ($h -eq [IntPtr]::Zero) { Write-Output 'none'; exit 0 }
 $sb = New-Object System.Text.StringBuilder 512
@@ -447,70 +452,260 @@ if ($width -le 0 -or $height -le 0) { Write-Output 'none'; exit 0 }
 Write-Output ("{0}|{1},{2},{3},{4}" -f $sb.ToString(), $rect.Left, $rect.Top, $width, $height)
 `
 
-// 按标题把窗口切到前台，返回标题和屏幕矩形。
+// 按标题把窗口切到前台，返回标题和屏幕矩形。找不到可见窗口时，会尝试
+// 恢复最小化到托盘的隐藏窗口（QQ 等程序常见状态）。
 export const WINDOW_FOCUS_SCRIPT = String.raw`param([string]$Title)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -TypeDefinition @'
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class HqFocus
 {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
     [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr h, bool altTab);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr h);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+    public static IntPtr FindWindowForProcess(int pid)
+    {
+        IntPtr best = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr h, IntPtr l)
+        {
+            uint owner;
+            GetWindowThreadProcessId(h, out owner);
+            if (owner != (uint)pid) return true;
+            int len = GetWindowTextLength(h);
+            if (len > 0) { best = h; return false; }
+            if (best == IntPtr.Zero) best = h;
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
+
+    public static IntPtr FindWindowByTitle(string title)
+    {
+        IntPtr best = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr h, IntPtr l)
+        {
+            int len = GetWindowTextLength(h);
+            if (len <= 0) return true;
+            StringBuilder sb = new StringBuilder(len + 1);
+            GetWindowText(h, sb, sb.Capacity);
+            if (sb.ToString().IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                best = h;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
 }
 '@
+try {
+  if (-not [HqFocus]::SetProcessDpiAwarenessContext([IntPtr](-4))) { [HqFocus]::SetProcessDPIAware() | Out-Null }
+} catch { [HqFocus]::SetProcessDPIAware() | Out-Null }
+$pattern = '*' + [System.Management.Automation.WildcardPattern]::Escape($Title) + '*'
 $proc = Get-Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle -like "*$Title*" } |
+    Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle -like $pattern } |
     Select-Object -First 1
-if (-not $proc) { Write-Output 'notfound'; exit 0 }
-$h = $proc.MainWindowHandle
+$h = [IntPtr]::Zero
+if ($proc) { $h = $proc.MainWindowHandle }
+if ($h -eq [IntPtr]::Zero) { $h = [HqFocus]::FindWindowByTitle($Title) }
+if ($h -eq [IntPtr]::Zero) {
+    $proc = Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessName -like "*$Title*" } |
+        Select-Object -First 1
+    if ($proc) { $h = [HqFocus]::FindWindowForProcess($proc.Id) }
+}
+if ($h -eq [IntPtr]::Zero) { Write-Output 'notfound'; exit 0 }
 [void][HqFocus]::ShowWindow($h, 9)
 [void][HqFocus]::BringWindowToTop($h)
 [void][HqFocus]::SetForegroundWindow($h)
-Start-Sleep -Milliseconds 250
+Start-Sleep -Milliseconds 600
 if ([HqFocus]::GetForegroundWindow() -ne $h) {
     # 前台切换可能被系统拒绝；SwitchToThisWindow 是少数仍可用的兜底。
     [HqFocus]::SwitchToThisWindow($h, $true)
-    Start-Sleep -Milliseconds 300
+    Start-Sleep -Milliseconds 400
 }
+$sb = New-Object System.Text.StringBuilder 512
+[void][HqFocus]::GetWindowText($h, $sb, 512)
+$windowTitle = if ($sb.Length -gt 0) { $sb.ToString() } elseif ($proc) { $proc.ProcessName } else { $Title }
 $rect = New-Object HqFocus+RECT
 [void][HqFocus]::GetWindowRect($h, [ref]$rect)
 $width = $rect.Right - $rect.Left
 $height = $rect.Bottom - $rect.Top
-Write-Output ("{0}|{1},{2},{3},{4}" -f $proc.MainWindowTitle, $rect.Left, $rect.Top, $width, $height)
+if ($width -le 0 -or $height -le 0) {
+    Start-Sleep -Milliseconds 400
+    [void][HqFocus]::GetWindowRect($h, [ref]$rect)
+    $width = $rect.Right - $rect.Left
+    $height = $rect.Bottom - $rect.Top
+}
+if ($width -le 0 -or $height -le 0) { Write-Output 'notfound'; exit 0 }
+Write-Output ("{0}|{1},{2},{3},{4}" -f $windowTitle, $rect.Left, $rect.Top, $width, $height)
 `
 
-// 把截图裁剪到指定矩形，用于只把目标窗口交给视觉模型。
+// 用命令行按进程名恢复/启动窗口：枚举该进程所有顶层窗口（包括隐藏/托盘窗口），
+// 执行 ShowWindow + SetForegroundWindow；找不到时用进程路径或开始菜单重新启动。
+export const WINDOW_RESTORE_SCRIPT = String.raw`param(
+  [string]$ProcessName,
+  [string]$Title = '',
+  [switch]$Launch,
+  [int]$WaitMs = 1200
+)
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class HqRestore
+{
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr h, bool altTab);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr h);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+    public static IntPtr[] FindWindows(int[] pids)
+    {
+        List<IntPtr> found = new List<IntPtr>();
+        EnumWindows(delegate(IntPtr h, IntPtr l)
+        {
+            uint owner;
+            GetWindowThreadProcessId(h, out owner);
+            if (Array.IndexOf(pids, (int)owner) >= 0) found.Add(h);
+            return true;
+        }, IntPtr.Zero);
+        return found.ToArray();
+    }
+
+    public static string TextOf(IntPtr h)
+    {
+        int len = GetWindowTextLength(h);
+        if (len <= 0) return "";
+        StringBuilder sb = new StringBuilder(len + 1);
+        GetWindowText(h, sb, sb.Capacity);
+        return sb.ToString();
+    }
+}
+'@
+try {
+  if (-not [HqRestore]::SetProcessDpiAwarenessContext([IntPtr](-4))) { [HqRestore]::SetProcessDPIAware() | Out-Null }
+} catch { [HqRestore]::SetProcessDPIAware() | Out-Null }
+function Get-ProcessList { @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue) }
+$procs = Get-ProcessList
+if ($procs.Count -eq 0 -and $Launch) {
+    $app = Get-StartApps -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "*$ProcessName*" } |
+        Select-Object -First 1
+    if ($app) {
+        Start-Process explorer.exe -ArgumentList "shell:AppsFolder\$($app.AppID)"
+        Start-Sleep -Milliseconds $WaitMs
+        $procs = Get-ProcessList
+    }
+}
+if ($procs.Count -eq 0) { Write-Output 'notfound'; exit 0 }
+$handles = [HqRestore]::FindWindows([int[]]($procs | ForEach-Object { $_.Id }))
+if ($handles.Length -eq 0 -and $Launch) {
+    $path = ($procs | Where-Object { $_.Path } | Select-Object -First 1).Path
+    if ($path) {
+        Start-Process -FilePath $path
+        Start-Sleep -Milliseconds $WaitMs
+        $procs = Get-ProcessList
+        $handles = [HqRestore]::FindWindows([int[]]($procs | ForEach-Object { $_.Id }))
+    }
+}
+if ($handles.Length -eq 0) { Write-Output 'notfound'; exit 0 }
+$best = [IntPtr]::Zero
+foreach ($h in $handles) {
+    $text = [HqRestore]::TextOf($h)
+    if ($Title -and $text -and $text.IndexOf($Title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $best = $h; break }
+    if (-not $Title -and $text) { $best = $h; break }
+    if ($best -eq [IntPtr]::Zero -and $text) { $best = $h }
+}
+if ($best -eq [IntPtr]::Zero) {
+    foreach ($h in $handles) {
+        $probe = New-Object HqRestore+RECT
+        if ([HqRestore]::GetWindowRect($h, [ref]$probe) -and ($probe.Right - $probe.Left) -gt 0) { $best = $h; break }
+    }
+}
+if ($best -eq [IntPtr]::Zero) { $best = $handles[0] }
+foreach ($h in $handles) {
+    if ([HqRestore]::TextOf($h) -or $h -eq $best) {
+        [void][HqRestore]::ShowWindow($h, 9)
+        [void][HqRestore]::ShowWindow($h, 5)
+    }
+}
+[void][HqRestore]::BringWindowToTop($best)
+[void][HqRestore]::SetForegroundWindow($best)
+Start-Sleep -Milliseconds 500
+[void][HqRestore]::SwitchToThisWindow($best, $true)
+Start-Sleep -Milliseconds 500
+$windowTitle = [HqRestore]::TextOf($best)
+if (-not $windowTitle) { $windowTitle = $ProcessName }
+$rect = New-Object HqRestore+RECT
+[void][HqRestore]::GetWindowRect($best, [ref]$rect)
+$width = $rect.Right - $rect.Left
+$height = $rect.Bottom - $rect.Top
+if ($width -le 0 -or $height -le 0) { Write-Output 'notfound'; exit 0 }
+Write-Output ("{0}|{1},{2},{3},{4}" -f $windowTitle, $rect.Left, $rect.Top, $width, $height)
+`
+
+// 把截图裁剪到指定矩形，并把最大边缩放到 MaxEdge，避免多屏截图过大。
 export const CROP_SCRIPT = String.raw`param(
   [string]$Source,
   [string]$Target,
   [int]$X,
   [int]$Y,
   [int]$Width,
-  [int]$Height
+  [int]$Height,
+  [int]$MaxEdge = 1920
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+$scale = [Math]::Max(1.0, [Math]::Max($Width, $Height) / [double]$MaxEdge)
+$outWidth = [Math]::Max(1, [int][Math]::Round($Width / $scale))
+$outHeight = [Math]::Max(1, [int][Math]::Round($Height / $scale))
 $img = [System.Drawing.Image]::FromFile($Source)
 try {
-    $bmp = New-Object System.Drawing.Bitmap $Width, $Height
+    $bmp = New-Object System.Drawing.Bitmap $outWidth, $outHeight
     try {
         $g = [System.Drawing.Graphics]::FromImage($bmp)
         try {
-            $dest = New-Object System.Drawing.Rectangle 0, 0, $Width, $Height
+            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $dest = New-Object System.Drawing.Rectangle 0, 0, $outWidth, $outHeight
             $src = New-Object System.Drawing.Rectangle $X, $Y, $Width, $Height
             $g.DrawImage($img, $dest, $src, [System.Drawing.GraphicsUnit]::Pixel)
         } finally { $g.Dispose() }
         $bmp.Save($Target, [System.Drawing.Imaging.ImageFormat]::Png)
     } finally { $bmp.Dispose() }
 } finally { $img.Dispose() }
-Write-Output 'ok'
+Write-Output "$outWidth,$outHeight,$scale"
 `

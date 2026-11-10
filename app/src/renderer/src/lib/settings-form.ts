@@ -1,4 +1,9 @@
-import type { ApiProfile, ProfileDraft } from '../../../shared/types'
+import type {
+  ApiProfile,
+  ProfileDraft,
+  SettingsSaveInput,
+  UiSettings
+} from '../../../shared/types'
 import { uid } from './utils'
 
 /** 设置面板里正在编辑的配置草稿：密钥只保留本次输入，已保存密钥不回落。 */
@@ -64,4 +69,33 @@ export function pairsText(pairs: Record<string, string>): string {
   return Object.entries(pairs)
     .map(([key, value]) => `${key}=${value}`)
     .join('\n')
+}
+/** Map the visible settings back into the IPC payload without dropping fields. */
+export function toSaveInput(
+  settings: UiSettings,
+  overrides: Partial<SettingsSaveInput> = {}
+): SettingsSaveInput {
+  return {
+    profiles: settings.profiles.map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      provider: profile.provider,
+      baseUrl: profile.baseUrl,
+      model: profile.model,
+      contextWindow: profile.contextWindow,
+      temperature: profile.temperature,
+      maxTokens: profile.maxTokens,
+      vision: profile.vision
+    })),
+    activeProfileId: settings.activeProfileId,
+    workspace: settings.workspace,
+    elevateOnStart: settings.elevateOnStart,
+    agentElevated: settings.agentElevated,
+    approvalMode: settings.approvalMode,
+    maxSteps: settings.maxSteps,
+    networkLocked: settings.networkLocked,
+    mcpServers: settings.mcpServers,
+    systemPromptExtra: settings.systemPromptExtra,
+    ...overrides
+  }
 }

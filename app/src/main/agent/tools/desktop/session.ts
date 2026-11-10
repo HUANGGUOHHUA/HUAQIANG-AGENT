@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,11 +15,13 @@ import {
   KEYBOARD_SCRIPT,
   MOUSE_SCRIPT,
   SCREEN_SCRIPT,
-  WINDOW_FOCUS_SCRIPT
+  WINDOW_FOCUS_SCRIPT,
+  WINDOW_RESTORE_SCRIPT
 } from './scripts'
 import type { ScreenBounds } from './visual'
 
 const SCREEN_SETTLE_MS = 300
+const MAX_VISUAL_EDGE = 1920
 const SCREEN_TIMEOUT = 20_000
 const MOUSE_TIMEOUT = 12_000
 const DRAG_TIMEOUT = 15_000
@@ -40,6 +43,16 @@ export interface ScreenCapture {
   foreground?: WindowBounds | null
   /** 恢复被隐藏的窗口与覆盖层；可重复调用。 */
   restore: () => void
+}
+
+/** 裁剪并缩放后的视觉输入：坐标需按 scale 乘回屏幕物理像素。 */
+export interface VisionCrop {
+  path: string
+  width: number
+  height: number
+  scale: number
+  originX: number
+  originY: number
 }
 
 /** 只保留中心点落在窗口矩形内的文字行。 */
@@ -193,15 +206,63 @@ function parseBounds(raw: string): ScreenBounds {
  * 接管期间被藏起来的主窗口。桌面操作全程保持隐藏，避免遮挡目标、
  * 抢焦点或把目标窗口压到别的窗口下面；运行结束时统一恢复。
  */
-let hiddenWindow: { win: BrowserWindow; wasVisible: boolean } | null = null
+interface HiddenWindowState {
+  win: BrowserWindow
+  wasVisible: boolean
+  previousOpacity: number
+  count: number
+}
 
-/** 桌面任务结束后把主窗口放回来（不抢焦点）。 */
-export function restoreDesktopWindow(): void {
-  const hidden = hiddenWindow
-  hiddenWindow = null
-  if (hidden && hidden.wasVisible && !hidden.win.isDestroyed()) {
-    hidden.win.showInactive()
+let hiddenWindow: HiddenWindowState | null = null
+
+/** 支持嵌套的接管：外层和工具内的临时动作可以成对 acquire/release。 */
+function acquireHiddenWindow(win: BrowserWindow): () => void {
+  if (hiddenWindow && hiddenWindow.win === win && !win.isDestroyed()) {
+    hiddenWindow.count += 1
+  } else {
+    if (hiddenWindow) restoreHiddenWindow()
+    hiddenWindow = {
+      win,
+      wasVisible: win.isVisible(),
+      previousOpacity: win.getOpacity(),
+      count: 1
+    }
+    win.setContentProtection(true)
+    win.setOpacity(0)
+    win.setIgnoreMouseEvents(true)
+    win.blur()
   }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    releaseHiddenWindow()
+  }
+}
+
+function releaseHiddenWindow(): void {
+  if (!hiddenWindow) return
+  hiddenWindow.count -= 1
+  if (hiddenWindow.count > 0) return
+  const state = hiddenWindow
+  hiddenWindow = null
+  const win = state.win
+  if (win.isDestroyed()) return
+  win.setOpacity(state.previousOpacity)
+  win.setIgnoreMouseEvents(false)
+  win.setContentProtection(false)
+  if (state.wasVisible) win.showInactive()
+}
+
+function restoreHiddenWindow(): void {
+  if (!hiddenWindow) return
+  hiddenWindow.count = 0
+  releaseHiddenWindow()
+}
+
+/** 桌面任务结束后把主窗口恢复为可见（不抢焦点）。 */
+export function restoreDesktopWindow(): void {
+  restoreHiddenWindow()
 }
 
 export class DesktopSession {
@@ -213,17 +274,16 @@ export class DesktopSession {
   ) {}
 
   /**
-   * 把自己藏起来，避免挡住目标窗口或抢走焦点。
-   * 整个桌面任务期间保持隐藏，直到 restoreDesktopWindow() 才显示。
+   * 不隐藏、不改变窗口大小：控制期间把主窗口变透明并让鼠标穿透，
+   * 同时开启内容保护，避免截图截到本程序。结束后恢复原样。
    */
   private async hideApp(suspendOverlay: boolean): Promise<() => void> {
     if (suspendOverlay) this.options.suspendOverlay?.()
     const win = this.getWindow()
-    if (win && !win.isDestroyed() && win.isVisible()) {
-      hiddenWindow = { win, wasVisible: true }
-      win.hide()
-    }
+    const release =
+      win && !win.isDestroyed() && win.isVisible() ? acquireHiddenWindow(win) : null
     return () => {
+      release?.()
       if (suspendOverlay) this.options.resumeOverlay?.()
     }
   }
@@ -234,6 +294,9 @@ export class DesktopSession {
 
   /** 输入动作期间保持自己的窗口隐藏，避免点击或按键打到本程序上。 */
   private async whileHidden<T>(run: () => Promise<T>): Promise<T> {
+    // If a capture already made the window transparent for the whole task,
+    // keep it that way between actions instead of flashing it back.
+    if (hiddenWindow) return run()
     const restore = await this.hideApp(false)
     try {
       return await run()
@@ -244,6 +307,8 @@ export class DesktopSession {
 
   async capture(holdApp = false, withForeground = false): Promise<ScreenCapture> {
     const restore = await this.hideApp(true)
+    let completed = false
+    let overlayResumed = false
     try {
       await new Promise((resolve) => setTimeout(resolve, SCREEN_SETTLE_MS))
       // 隐藏自己的窗口后，前台就是用户真正在用的那个程序。
@@ -254,11 +319,16 @@ export class DesktopSession {
         foreground = await this.foregroundWindow().catch(() => null)
         if (foreground && this.isOwnWindow(foreground)) foreground = null
       }
-      const path = join(tmpdir(), `huaqiang-screen-${Date.now()}.png`)
+      const path = join(tmpdir(), `huaqiang-screen-${randomUUID()}.png`)
       const raw = await runPowerShell('desktop-screen', SCREEN_SCRIPT, ['-Path', path], SCREEN_TIMEOUT)
+      completed = true
+      // 截图完成后立即恢复 HUD，让用户能看到模型正在分析和执行什么。
+      this.options.resumeOverlay?.()
+      overlayResumed = true
       return { path, bounds: parseBounds(raw), foreground, restore }
     } finally {
-      if (!holdApp) restore()
+      if (!overlayResumed) this.options.resumeOverlay?.()
+      if (!holdApp || !completed) restore()
     }
   }
 
@@ -272,13 +342,22 @@ export class DesktopSession {
    * 从整屏截图里裁出目标窗口，只把这块图交给视觉模型。
    * 模型在窗口图里的坐标就是窗口内坐标，加回原点即可。
    */
-  async cropWindow(source: string, screen: ScreenBounds, win: WindowBounds): Promise<string> {
-    const x = Math.max(0, win.x - screen.x)
-    const y = Math.max(0, win.y - screen.y)
-    const width = Math.min(win.width, screen.width - x)
-    const height = Math.min(win.height, screen.height - y)
-    const target = join(tmpdir(), `huaqiang-crop-${Date.now()}.png`)
-    await runPowerShell(
+  async cropWindow(
+    source: string,
+    screen: ScreenBounds,
+    crop: ScreenBounds,
+    maxEdge = MAX_VISUAL_EDGE
+  ): Promise<VisionCrop> {
+    const left = Math.max(crop.x, screen.x)
+    const top = Math.max(crop.y, screen.y)
+    const right = Math.min(crop.x + crop.width, screen.x + screen.width)
+    const bottom = Math.min(crop.y + crop.height, screen.y + screen.height)
+    const x = Math.max(0, left - screen.x)
+    const y = Math.max(0, top - screen.y)
+    const width = Math.max(1, right - left)
+    const height = Math.max(1, bottom - top)
+    const target = join(tmpdir(), `huaqiang-crop-${randomUUID()}.png`)
+    const raw = await runPowerShell(
       'desktop-crop',
       CROP_SCRIPT,
       [
@@ -286,12 +365,21 @@ export class DesktopSession {
         '-Target', target,
         '-X', String(x),
         '-Y', String(y),
-        '-Width', String(Math.max(1, width)),
-        '-Height', String(Math.max(1, height))
+        '-Width', String(width),
+        '-Height', String(height),
+        '-MaxEdge', String(maxEdge)
       ],
       15_000
     )
-    return target
+    const [outWidth, outHeight, scale] = raw.split(',').map(Number)
+    return {
+      path: target,
+      width: Number.isFinite(outWidth) && outWidth > 0 ? outWidth : width,
+      height: Number.isFinite(outHeight) && outHeight > 0 ? outHeight : height,
+      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+      originX: left,
+      originY: top
+    }
   }
 
   /** 按标题包含匹配把窗口切到前台，返回它切换后的矩形。 */
@@ -302,6 +390,21 @@ export class DesktopSession {
       ['-Title', title],
       DRAG_TIMEOUT
     )
+    if (!raw || raw === 'notfound') return null
+    return parseWindowLine(raw)
+  }
+
+  /** 用命令行按进程名恢复/启动窗口（适合 QQ/微信等常驻托盘程序）。 */
+  async restoreWindow(
+    processName: string,
+    title: string,
+    launch: boolean,
+    waitMs: number
+  ): Promise<WindowBounds | null> {
+    const args = ['-ProcessName', processName, '-WaitMs', String(waitMs)]
+    if (title) args.push('-Title', title)
+    if (launch) args.push('-Launch')
+    const raw = await runPowerShell('desktop-restore', WINDOW_RESTORE_SCRIPT, args, DRAG_TIMEOUT)
     if (!raw || raw === 'notfound') return null
     return parseWindowLine(raw)
   }
@@ -338,6 +441,9 @@ export class DesktopSession {
         // Keep Windows OCR as a working fallback when RapidOCR is not bundled.
         this.rapidUnavailable = true
       }
+    }
+    if (opts.region) {
+      throw new Error('当前无法按指定区域识别：RapidOCR 不可用，请改用整屏识别或安装 RapidOCR')
     }
     const result = await ocrImageBoxes(path)
     return { ...result, engine: 'windows', region: undefined }

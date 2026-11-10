@@ -61,6 +61,7 @@ export default function Conversation({
     ? live.content.length +
       live.reasoning.length +
       (live.toolDraft?.chars ?? 0) +
+      live.toolCalls.length +
       live.toolCalls.reduce((total, call) => total + (call.result?.length ?? 0), 0)
     : 0
 
@@ -68,6 +69,13 @@ export default function Conversation({
     () => `${messages.length}:${messages[messages.length - 1]?.id ?? ''}:${liveSignature}:${running}`,
     [messages, liveSignature, running]
   )
+
+  const conversationKey = messages[0]?.id ?? ''
+
+  useEffect(() => {
+    stickRef.current = true
+    endRef.current?.scrollIntoView({ block: 'end' })
+  }, [conversationKey])
 
   useEffect(() => {
     if (stickRef.current) endRef.current?.scrollIntoView({ block: 'end' })

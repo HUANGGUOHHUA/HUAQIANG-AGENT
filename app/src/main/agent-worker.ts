@@ -15,7 +15,7 @@ function argValue(name: string): string {
 }
 
 const pipeName = argValue('pipe')
-const token = argValue('token')
+const token = process.env.HQ_WORKER_TOKEN || argValue('token')
 const pythonPath = argValue('python')
 const logFile = argValue('log')
 
@@ -44,14 +44,23 @@ const builtin = new BuiltinMcpService({
   version: 'agent-worker'
 })
 let mcpClient: Client | null = null
+let mcpReady: Promise<Client> | null = null
 
 async function ensureMcpClient(): Promise<Client> {
   if (mcpClient) return mcpClient
-  const transport = await builtin.start()
-  const client = new Client({ name: 'huaqiang-agent-worker', version: '1.0.0' }, { capabilities: {} })
-  await client.connect(transport)
-  mcpClient = client
-  return client
+  if (!mcpReady) {
+    mcpReady = (async () => {
+      const transport = await builtin.start()
+      const client = new Client({ name: 'huaqiang-agent-worker', version: '1.0.0' }, { capabilities: {} })
+      await client.connect(transport)
+      mcpClient = client
+      return client
+    })().catch((error) => {
+      mcpReady = null
+      throw error
+    })
+  }
+  return mcpReady
 }
 
 const socket = net.connect(pipeName)
@@ -109,7 +118,7 @@ async function handle(message: WorkerRequest): Promise<void> {
       const result = await client.callTool(
         { name: message.tool, arguments: message.args ?? {} },
         undefined,
-        { timeout: 300_000 }
+        { timeout: 300_000, signal: controller.signal }
       )
       const content = Array.isArray(result.content) ? result.content : []
       const text = content

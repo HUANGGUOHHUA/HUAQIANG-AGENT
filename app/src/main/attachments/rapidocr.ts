@@ -1,9 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { unlink, writeFile } from 'node:fs/promises'
 
 export interface RapidOcrLine {
   text: string
@@ -65,6 +64,10 @@ for line in sys.stdin:
         request_id = request.get("id")
         path = request.get("path")
         region = request.get("region")
+        from PIL import Image
+        with Image.open(path) as probe:
+            if probe.width * probe.height > 40000000:
+                raise ValueError("图片尺寸过大：%dx%d" % (probe.width, probe.height))
         if region:
             from PIL import Image
             image = Image.open(path).convert("RGB")
@@ -123,16 +126,14 @@ let worker: ChildProcessWithoutNullStreams | null = null
 let workerPython = ''
 let workerScript = ''
 let workerReady: Promise<void> | null = null
+let workerStarting: Promise<void> | null = null
 let pending = new Map<number, Pending>()
 let nextId = 1
 let stdoutBuffer = ''
 
 async function ensureScript(): Promise<string> {
-  if (workerScript && existsSync(workerScript)) return workerScript
-  const path = join(tmpdir(), 'huaqiang-rapidocr-worker.py')
-  const current = existsSync(path) ? await readFile(path, 'utf8').catch(() => '') : ''
-  if (current !== WORKER) await writeFile(path, WORKER, 'utf8')
-  workerScript = path
+  const path = join(tmpdir(), `huaqiang-rapidocr-worker-${randomUUID()}.py`)
+  await writeFile(path, WORKER, 'utf8')
   return path
 }
 
@@ -146,6 +147,17 @@ function rejectAll(error: Error): void {
 
 async function ensureWorker(pythonPath: string): Promise<void> {
   if (worker && !worker.killed && workerPython === pythonPath) return workerReady ?? Promise.resolve()
+  if (workerStarting) return workerStarting
+  const start = doEnsureWorker(pythonPath)
+  workerStarting = start
+  try {
+    await start
+  } finally {
+    workerStarting = null
+  }
+}
+
+async function doEnsureWorker(pythonPath: string): Promise<void> {
   if (worker) {
     worker.kill()
     worker = null
@@ -164,6 +176,7 @@ async function ensureWorker(pythonPath: string): Promise<void> {
       if (!ready) reject(error)
       rejectAll(error)
       worker = null
+      unlink(script).catch(() => undefined)
     }
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
@@ -212,6 +225,7 @@ async function ensureWorker(pythonPath: string): Promise<void> {
     })
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', () => undefined)
+    child.stdin.on('error', (error) => fail(new Error(`RapidOCR 输入通道错误：${error.message}`)))
     child.on('error', (error) => fail(new Error(`RapidOCR 进程启动失败：${error.message}`)))
     child.on('exit', (code) => fail(new Error(`RapidOCR 进程已退出（${code ?? 'unknown'}）`)))
   })

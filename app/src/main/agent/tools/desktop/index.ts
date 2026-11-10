@@ -14,6 +14,7 @@ export const DESKTOP_TOOL_NAMES = [
   'screen_click',
   'screen_click_target',
   'window_focus',
+  'window_restore',
   'mouse_move',
   'mouse_click',
   'mouse_drag',

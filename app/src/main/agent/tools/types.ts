@@ -18,6 +18,10 @@ export interface ToolDefinition {
   description: string
   inputSchema: Record<string, unknown>
   risk: ToolRisk
+  /** Ask for approval even when the session runs in auto mode. */
+  confirmInAuto?: boolean
+  /** Ask for approval in auto mode only when the arguments look dangerous. */
+  confirmInAutoWhen?: (args: Record<string, unknown>) => boolean
   summarize: (args: Record<string, unknown>) => string
   execute: (args: Record<string, unknown>, context: ToolContext) => Promise<ToolResult>
 }

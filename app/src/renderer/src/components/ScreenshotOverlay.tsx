@@ -219,6 +219,11 @@ export default function ScreenshotOverlay({
     dragStartRef.current = { x: event.clientX, y: event.clientY }
     setRect({ x: event.clientX, y: event.clientY, width: 0, height: 0 })
     setPixelSize(null)
+    const clear = (): void => {
+      window.removeEventListener('mouseup', clear)
+      dragStartRef.current = null
+    }
+    window.addEventListener('mouseup', clear)
   }, [])
 
   const onSelectMove = useCallback((event: React.MouseEvent): void => {

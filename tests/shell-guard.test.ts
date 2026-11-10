@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { KEYBOARD_SCRIPT } from '../app/src/main/agent/tools/desktop/scripts'
-import { desktopAutomationHint } from '../app/src/main/agent/tools/shell'
+import { desktopAutomationHint, isDangerousCommand } from '../app/src/main/agent/tools/shell'
 
 describe('run_command desktop automation guard', () => {
   it('rejects re-inventing mouse input', () => {
@@ -36,5 +36,18 @@ describe('keyboard fallback', () => {
     expect(KEYBOARD_SCRIPT).toContain('SendInput')
     expect(KEYBOARD_SCRIPT).toContain("SendWait('^v')")
     expect(KEYBOARD_SCRIPT).toContain("Write-Output 'clipboard'")
+  })
+})
+describe('auto-mode command approval', () => {
+  it('flags system-level commands', () => {
+    expect(isDangerousCommand('format C:')).toBe(true)
+    expect(isDangerousCommand('shutdown /r /t 0')).toBe(true)
+    expect(isDangerousCommand('reg add HKLM\\Test /v X /d Y')).toBe(true)
+    expect(isDangerousCommand('Set-ExecutionPolicy Bypass')).toBe(true)
+  })
+
+  it('leaves normal build commands alone', () => {
+    expect(isDangerousCommand('npm run build')).toBe(false)
+    expect(isDangerousCommand('git status')).toBe(false)
   })
 })

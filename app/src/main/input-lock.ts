@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -139,9 +140,10 @@ let scriptPath: string | null = null
 export function startInputLock(parentPid: number): void {
   if (child && child.exitCode === null) return
   try {
-    const path = join(tmpdir(), `huaqiang-input-lock-${process.pid}.ps1`)
+    const path = join(tmpdir(), `huaqiang-input-lock-${randomUUID()}.ps1`)
     writeFileSync(path, LOCK_SCRIPT, 'utf8')
     scriptPath = path
+    const ownScript = path
     const processHandle = spawn(
       'powershell.exe',
       [
@@ -156,14 +158,24 @@ export function startInputLock(parentPid: number): void {
         '-MaxMinutes',
         '60'
       ],
-      { windowsHide: true, stdio: 'ignore', detached: false }
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], detached: false }
     )
     child = processHandle
+    let locked = false
+    const lockTimer = setTimeout(() => {
+      if (!locked) console.error('输入锁未能在 10 秒内安装鼠标钩子，界面提示可能不准确')
+    }, 10_000)
+    processHandle.stdout?.on('data', (chunk) => {
+      if (String(chunk).includes('LOCKED')) {
+        locked = true
+        clearTimeout(lockTimer)
+      }
+    })
     processHandle.once('exit', () => {
       if (child === processHandle) child = null
-      if (scriptPath) {
+      if (scriptPath === ownScript) {
         try {
-          unlinkSync(scriptPath)
+          unlinkSync(ownScript)
         } catch {
           // The script may still be in use; it is harmless in %TEMP%.
         }
@@ -172,9 +184,25 @@ export function startInputLock(parentPid: number): void {
     })
     processHandle.once('error', () => {
       if (child === processHandle) child = null
+      if (scriptPath === ownScript) {
+        try {
+          unlinkSync(ownScript)
+        } catch {
+          // The script may still be in use; it is harmless in %TEMP%.
+        }
+        scriptPath = null
+      }
     })
   } catch {
     child = null
+    if (scriptPath) {
+      try {
+        unlinkSync(scriptPath)
+      } catch {
+        // Harmless if the script is still briefly open.
+      }
+      scriptPath = null
+    }
   }
 }
 
