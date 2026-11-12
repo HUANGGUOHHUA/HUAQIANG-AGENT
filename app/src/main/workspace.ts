@@ -29,25 +29,41 @@ async function spawnDetached(command: string, args: string[]): Promise<void> {
  *  在部分安全软件环境下，主进程直接 spawn explorer.exe 会被静默拦截，
  *  而系统自带的 powershell 作为中间层可以通过。 */
 async function launchExplorer(target: string, forceNewWindow = false): Promise<void> {
-  const args = forceNewWindow
-    ? ['/c', 'start', '', 'explorer.exe', '/e,', target]
-    : ['/c', 'start', '', target]
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn('cmd.exe', args, {
-      windowsHide: true,
-      stdio: 'ignore',
-      detached: true
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('explorer.exe', forceNewWindow ? ['/e,', target] : [target], {
+        windowsHide: true,
+        stdio: 'ignore',
+        detached: true
+      })
+      child.once('spawn', () => resolve())
+      child.once('error', reject)
+      child.unref()
     })
-    child.once('error', reject)
-    child.once('exit', (code) => {
-      if (code === 0) {
-        focusExplorerWindow(target)
-        resolve()
-      }
-      else reject(new Error(`启动资源管理器失败（退出码 ${code}）`))
+  } catch {
+    // Fallback through PowerShell for environments where direct explorer
+    // launches are blocked. The path stays inside a single-quoted literal and
+    // the whole script is base64 encoded, so cmd metacharacters cannot escape.
+    const escaped = target.replace(/'/g, "''")
+    const script = forceNewWindow
+      ? `Start-Process explorer.exe -ArgumentList '/e,', '${escaped}'`
+      : `Start-Process '${escaped}'`
+    const encoded = Buffer.from(script, 'utf16le').toString('base64')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+        { windowsHide: true, stdio: 'ignore', detached: true }
+      )
+      child.once('error', reject)
+      child.once('exit', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`启动资源管理器失败（退出码 ${code}）`))
+      })
+      child.unref()
     })
-    child.unref()
-  })
+  }
+  focusExplorerWindow(target)
 }
 
 async function findWpsExecutable(extension: string): Promise<string | null> {

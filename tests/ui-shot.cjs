@@ -27,7 +27,19 @@ const settings = {
   workspace: 'D:\\desk\\华强智码项目',
   approvalMode: 'ask',
   maxSteps: 24,
-  mcpServers: [],
+  mcpServers: [
+    {
+      id: 'mock-mcp',
+      name: 'Mock MCP',
+      enabled: true,
+      transport: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+      env: { TOKEN: 'demo' },
+      url: '',
+      headers: {}
+    }
+  ],
   systemPromptExtra: '',
   encryptionAvailable: true
 }
@@ -101,6 +113,11 @@ const mock = `
   await page.waitForTimeout(900)
   await page.screenshot({ path: path.join(outDir, 'settings-model.png') })
   console.log('shot settings-model')
+
+  await page.getByRole('button', { name: 'MCP 扩展' }).click()
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: path.join(outDir, 'settings-mcp.png') })
+  console.log('shot settings-mcp')
 
   await browser.close()
 })().catch((error) => {

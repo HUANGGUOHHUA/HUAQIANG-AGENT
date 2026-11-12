@@ -26,7 +26,9 @@ function cleanUsage(value: unknown): Usage | undefined {
     cacheMissTokens: number('cacheMissTokens'),
     cacheCreationTokens: number('cacheCreationTokens')
   }
-  return usage.totalTokens > 0 || usage.inputTokens > 0 ? usage : undefined
+  return usage.totalTokens > 0 || usage.inputTokens > 0 || usage.outputTokens > 0
+    ? usage
+    : undefined
 }
 
 function cleanStats(value: unknown): SessionStats | undefined {
@@ -142,8 +144,10 @@ function cleanMessage(value: unknown): AppMessage | null {
                 ? item.content.slice(0, 200_000)
                 : undefined,
             dataUrl:
-              kind === 'image' && typeof item.dataUrl === 'string'
-                ? item.dataUrl.slice(0, 8_000_000)
+              kind === 'image' &&
+              typeof item.dataUrl === 'string' &&
+              item.dataUrl.length <= 8_000_000
+                ? item.dataUrl
                 : undefined
           }
         })
@@ -159,6 +163,26 @@ function cleanMessage(value: unknown): AppMessage | null {
     error: cleanText(message.error, 10_000) || undefined,
     attachments: attachments && attachments.length ? attachments : undefined
   }
+}
+
+/** Drop image payloads from the oldest messages until the JSON fits the limit. */
+function stripOldImageData(messages: AppMessage[], limit: number): AppMessage[] {
+  const result = messages.map((message) => ({
+    ...message,
+    attachments: message.attachments?.map((item) => ({ ...item }))
+  }))
+  let size = Buffer.byteLength(JSON.stringify(result), 'utf8')
+  if (size <= limit) return result
+  for (const message of result) {
+    for (const attachment of message.attachments ?? []) {
+      if (attachment.kind !== 'image' || !attachment.dataUrl) continue
+      size -= Buffer.byteLength(attachment.dataUrl, 'utf8')
+      attachment.kind = 'binary'
+      attachment.dataUrl = undefined
+      if (size <= limit) return result
+    }
+  }
+  return result
 }
 
 function titleFor(session: ChatSession): string {
@@ -186,22 +210,36 @@ export class SessionStore {
 
   async list(): Promise<SessionMeta[]> {
     const files = await readdir(this.dir).catch(() => [] as string[])
+    const names = files.filter((file) => file.endsWith('.json'))
     const metas: SessionMeta[] = []
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue
-      try {
-        const raw = JSON.parse(await readFile(join(this.dir, file), 'utf8')) as ChatSession
-        if (!raw || !ID_RE.test(raw.id)) continue
-        metas.push({
-          id: raw.id,
-          title: cleanText(raw.title, 100) || '新对话',
-          createdAt: raw.createdAt || Date.now(),
-          updatedAt: raw.updatedAt || raw.createdAt || Date.now(),
-          messageCount: Array.isArray(raw.messages) ? raw.messages.length : 0,
-          workspace: cleanText(raw.workspace, 2000) || undefined
+    const chunkSize = 16
+    for (let index = 0; index < names.length; index += chunkSize) {
+      const chunk = names.slice(index, index + chunkSize)
+      const read = await Promise.all(
+        chunk.map(async (file): Promise<SessionMeta | null> => {
+          try {
+            const raw = JSON.parse(await readFile(join(this.dir, file), 'utf8')) as ChatSession
+            if (!raw || !ID_RE.test(raw.id)) return null
+            return {
+              id: raw.id,
+              title: cleanText(raw.title, 100) || '新对话',
+              createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
+              updatedAt:
+                typeof raw.updatedAt === 'number'
+                  ? raw.updatedAt
+                  : typeof raw.createdAt === 'number'
+                    ? raw.createdAt
+                    : Date.now(),
+              messageCount: Array.isArray(raw.messages) ? raw.messages.length : 0,
+              workspace: cleanText(raw.workspace, 2000) || undefined
+            }
+          } catch {
+            return null
+          }
         })
-      } catch {
-        // Ignore corrupt session files.
+      )
+      for (const meta of read) {
+        if (meta) metas.push(meta)
       }
     }
     return metas.sort((a, b) => b.updatedAt - a.updatedAt)
@@ -212,12 +250,12 @@ export class SessionStore {
     if (!existsSync(file)) return null
     try {
       const raw = JSON.parse(await readFile(file, 'utf8')) as ChatSession
-      if (!raw || !ID_RE.test(raw.id)) return null
+      if (!raw || !ID_RE.test(raw.id) || raw.id !== id) return null
       return {
         id: raw.id,
         title: cleanText(raw.title, 100) || '新对话',
-        createdAt: raw.createdAt || Date.now(),
-        updatedAt: raw.updatedAt || Date.now(),
+        createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
+        updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
         workspace: cleanText(raw.workspace, 2000) || undefined,
         model: cleanText(raw.model, 200) || undefined,
         modelContextWindow:
@@ -236,7 +274,7 @@ export class SessionStore {
         contextInstruction: cleanText(raw.contextInstruction, 2_000) || undefined,
         lastChanges: cleanChanges(raw.lastChanges),
         messages: Array.isArray(raw.messages)
-          ? raw.messages.map(cleanMessage).filter((m): m is AppMessage => Boolean(m)).slice(0, 400)
+          ? raw.messages.map(cleanMessage).filter((m): m is AppMessage => Boolean(m)).slice(-400)
           : []
       }
     } catch {
@@ -244,7 +282,19 @@ export class SessionStore {
     }
   }
 
-  async save(input: ChatSession): Promise<SessionMeta> {
+  private queue: Promise<unknown> = Promise.resolve()
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(task, task)
+    this.queue = next.catch(() => undefined)
+    return next
+  }
+
+  save(input: ChatSession): Promise<SessionMeta> {
+    return this.enqueue(() => this.saveNow(input))
+  }
+
+  private async saveNow(input: ChatSession): Promise<SessionMeta> {
     if (!input || !ID_RE.test(input.id)) throw new Error('无效的会话 ID')
     const messages = Array.isArray(input.messages)
       ? input.messages.map(cleanMessage).filter((m): m is AppMessage => Boolean(m)).slice(-400)
@@ -274,8 +324,10 @@ export class SessionStore {
       lastChanges: cleanChanges(input.lastChanges),
       messages
     }
-    const json = JSON.stringify(session, null, 2)
-    if (Buffer.byteLength(json, 'utf8') > 20 * 1024 * 1024) {
+    const limit = 20 * 1024 * 1024
+    const trimmedMessages = stripOldImageData(messages, limit - 1024)
+    const json = JSON.stringify({ ...session, messages: trimmedMessages }, null, 2)
+    if (Buffer.byteLength(json, 'utf8') > limit) {
       throw new Error('会话过大，无法保存')
     }
     const file = this.fileFor(session.id)
@@ -310,7 +362,11 @@ export class SessionStore {
     }
   }
 
-  async remove(id: string): Promise<void> {
+  remove(id: string): Promise<void> {
+    return this.enqueue(() => this.removeNow(id))
+  }
+
+  private async removeNow(id: string): Promise<void> {
     const file = this.fileFor(id)
     await unlink(file).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error

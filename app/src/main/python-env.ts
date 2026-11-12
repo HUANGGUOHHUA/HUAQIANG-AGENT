@@ -83,7 +83,11 @@ export class PythonEnvironment {
   }
 
   currentPythonPath(): string {
-    return this.status.pythonPath ?? this.bundledPython ?? this.venvPython
+    const candidates = [this.status.pythonPath, this.bundledPython, this.venvPython]
+    return (
+      candidates.find((item): item is string => typeof item === 'string' && existsSync(item)) ||
+      'python.exe'
+    )
   }
 
   private candidates(): PythonCandidate[] {
@@ -135,7 +139,12 @@ export class PythonEnvironment {
       'print(json.dumps({m: bool(importlib.util.find_spec(m)) for m in mods}))'
     ].join('\n')
     const { stdout } = await exec(python, ['-c', script], 30_000)
-    const line = stdout.trim().split(/\r?\n/).pop() ?? '{}'
+    const line =
+      stdout
+        .trim()
+        .split(/\r?\n/)
+        .reverse()
+        .find((item) => item.trim().startsWith('{')) ?? '{}'
     const parsed = JSON.parse(line) as Record<string, boolean>
     return PYTHON_PACKAGES.filter((item) => !parsed[item.module]).map((item) => item.pip)
   }
@@ -279,7 +288,14 @@ export class PythonEnvironment {
       )
       let tail = ''
       const timer = setTimeout(() => {
-        child.kill()
+        if (child.pid) {
+          spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+            windowsHide: true,
+            stdio: 'ignore'
+          }).unref()
+        } else {
+          child.kill()
+        }
         reject(new Error('Python 依赖安装超过 15 分钟'))
       }, 15 * 60_000)
       const onData = (chunk: Buffer): void => {

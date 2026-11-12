@@ -30,12 +30,14 @@ async function imageToDataUrl(
 }
 
 export async function fileToAttachment(file: File, index = 0): Promise<AttachmentPayload | null> {
+  const id = crypto.randomUUID()
   const name = file.name?.trim() || `粘贴内容-${stamp()}-${index + 1}`
   if (file.type.startsWith('image/')) {
     try {
       const { dataUrl, mime } = await imageToDataUrl(file)
       const ext = mime === 'image/png' ? 'png' : 'jpg'
       return {
+        id,
         path: name.includes('.') ? name : `${name}.${ext}`,
         kind: 'image',
         mime,
@@ -53,6 +55,7 @@ export async function fileToAttachment(file: File, index = 0): Promise<Attachmen
     try {
       const text = await file.text()
       return {
+        id,
         path: name,
         kind: 'text',
         mime: file.type || 'text/plain',
@@ -64,6 +67,7 @@ export async function fileToAttachment(file: File, index = 0): Promise<Attachmen
     }
   }
   return {
+    id,
     path: name,
     kind: 'binary',
     mime: file.type || 'application/octet-stream',

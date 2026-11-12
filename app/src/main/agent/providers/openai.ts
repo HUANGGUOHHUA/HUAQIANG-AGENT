@@ -1,4 +1,5 @@
 import type { AppMessage, AttachmentPayload, Usage } from '../../../shared/types'
+import { cleanRepetition, findRepetition } from '../repetition'
 import { errorMessageFrom, readSse } from './sse'
 import type {
   ProviderCallbacks,
@@ -119,7 +120,28 @@ function parseFallbackJson(
   const choices = Array.isArray(json.choices) ? json.choices : []
   const choice = (choices[0] ?? {}) as Record<string, unknown>
   const message = (choice.message ?? {}) as Record<string, unknown>
-  const text = typeof message.content === 'string' ? message.content : ''
+  const rawContent = message.content
+  let rawText = ''
+  if (typeof rawContent === 'string') {
+    rawText = rawContent
+  } else if (Array.isArray(rawContent)) {
+    rawText = rawContent
+      .map((part) =>
+        part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string'
+          ? String((part as Record<string, unknown>).text)
+          : ''
+      )
+      .join('')
+  }
+  const reasoning =
+    typeof message.reasoning_content === 'string'
+      ? message.reasoning_content
+      : typeof message.reasoning === 'string'
+        ? message.reasoning
+        : ''
+  if (reasoning) callbacks.onReasoning?.(reasoning)
+  const repetition = Boolean(findRepetition(rawText))
+  const text = repetition ? cleanRepetition(rawText) : rawText
   if (text) callbacks.onText(text)
   const toolCalls: ProviderToolCall[] = []
   if (Array.isArray(message.tool_calls)) {
@@ -141,7 +163,8 @@ function parseFallbackJson(
     reasoning: '',
     toolCalls,
     usage: usageFromRaw(usage),
-    finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : undefined
+    finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : undefined,
+    repetition
   }
 }
 
@@ -155,7 +178,11 @@ export async function streamOpenAI(
     messages: toOpenAIMessages(request.system, request.messages, request.attachments),
     stream: true,
     temperature: config.temperature,
-    max_tokens: config.maxTokens
+    max_tokens: config.maxTokens,
+    // These are accepted by OpenAI-compatible local servers and discourage
+    // the token-level loops that small quantized models often fall into.
+    frequency_penalty: 0.3,
+    presence_penalty: 0.2
   }
   if (isLocalEndpoint(config.baseUrl)) {
     // llama.cpp and several local OpenAI-compatible servers reuse the KV cache
@@ -179,19 +206,36 @@ export async function streamOpenAI(
     body.tool_choice = 'auto'
   }
 
-  const response = await fetch(chatCompletionsUrl(config.baseUrl), {
+  const endpoint = chatCompletionsUrl(config.baseUrl)
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream, application/json',
+    ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {})
+  }
+  let response = await fetch(endpoint, {
     method: 'POST',
     signal: request.signal,
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream, application/json',
-      ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {})
-    },
+    headers,
     body: JSON.stringify(body)
   })
 
   if (!response.ok) {
-    throw new Error(await errorMessageFrom(response))
+    const message = await errorMessageFrom(response)
+    // Some OpenAI-compatible servers do not implement penalty fields. Retry
+    // once without them instead of making the model unusable.
+    if (response.status === 400 && /frequency_penalty|presence_penalty|unknown|unsupported/i.test(message)) {
+      delete body.frequency_penalty
+      delete body.presence_penalty
+      response = await fetch(endpoint, {
+        method: 'POST',
+        signal: request.signal,
+        headers,
+        body: JSON.stringify(body)
+      })
+      if (!response.ok) throw new Error(await errorMessageFrom(response))
+    } else {
+      throw new Error(message)
+    }
   }
 
   const contentType = (response.headers.get('content-type') || '').toLowerCase()
@@ -207,6 +251,8 @@ export async function streamOpenAI(
   let text = ''
   let reasoning = ''
   let finishReason = ''
+  let repetition = false
+  let lastRepeatCheck = 0
   let usage = usageOf(0, 0)
   const toolCalls = new Map<number, { id: string; name: string; args: string }>()
 
@@ -234,6 +280,15 @@ export async function streamOpenAI(
     const content = delta.content
     if (typeof content === 'string' && content) {
       text += content
+      if (text.length > 240 && text.length - lastRepeatCheck >= 120) {
+        lastRepeatCheck = text.length
+        if (findRepetition(text)) {
+          repetition = true
+          finishReason = 'repetition'
+          text = cleanRepetition(text)
+          break
+        }
+      }
       callbacks.onText(content)
     }
     const thinking =
@@ -281,6 +336,7 @@ export async function streamOpenAI(
         argsRaw: call.args
       })),
     usage,
-    finishReason
+    finishReason,
+    repetition
   }
 }

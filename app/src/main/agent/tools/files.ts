@@ -1,5 +1,16 @@
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile
+} from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import fg from 'fast-glob'
 import { displayPath, resolveWithinRoot } from '../../security/paths'
 import type { ToolDefinition, ToolResult } from './types'
@@ -27,6 +38,20 @@ async function readTextFile(absolute: string): Promise<{ text: string; size: num
   } finally {
     await handle.close()
   }
+}
+
+/**
+ * Resolve a path for destructive operations. The final component is kept as a
+ * link when it is a symlink, so deleting/moving a link never touches its target.
+ */
+async function resolveForMutation(workspace: string, input: string): Promise<string> {
+  const resolved = await resolveWithinRoot(workspace, input)
+  const raw = isAbsolute(input) ? resolve(input) : resolve(workspace, input)
+  const realParent = await resolveWithinRoot(workspace, dirname(raw)).catch(() => '')
+  if (!realParent) return resolved
+  const candidate = join(realParent, basename(raw))
+  const info = await lstat(candidate).catch(() => null)
+  return info?.isSymbolicLink() ? candidate : resolved
 }
 
 async function buildTree(
@@ -204,8 +229,12 @@ export function createFileTools(): ToolDefinition[] {
         const content = stringArg(args, 'content', { max: 5_000_000 })
         if (Buffer.byteLength(content, 'utf8') > 5_000_000) throw new ToolError('文件内容超过 5MB 限制')
         const target = await resolveWithinRoot(context.workspace, input)
-        const existed = await stat(target).then((s) => s.isFile()).catch(() => false)
-        const previous = existed ? await readFile(target, 'utf8').catch(() => '') : ''
+        const existing = await stat(target).catch(() => null)
+        const existed = Boolean(existing?.isFile())
+        const previous =
+          existed && existing && existing.size <= MAX_READ
+            ? await readFile(target, 'utf8').catch(() => '')
+            : ''
         await mkdir(dirname(target), { recursive: true })
         await writeFile(target, content, 'utf8')
         return textResult(
@@ -241,6 +270,9 @@ export function createFileTools(): ToolDefinition[] {
         const target = await resolveWithinRoot(context.workspace, input)
         const { text, truncated } = await readTextFile(target)
         if (truncated) throw new ToolError('文件超过 2MB 读取限制，无法安全编辑，请改用 read_file 分段查看后用其他方式修改')
+        if (text.includes('\uFFFD')) {
+          throw new ToolError('文件不是 UTF-8 编码，直接编辑会破坏内容，请先转换为 UTF-8')
+        }
         const parts = text.split(oldString)
         const occurrences = parts.length - 1
         if (occurrences === 0) throw new ToolError('文件中没有找到 old_string，请先读取文件确认原文')
@@ -248,7 +280,7 @@ export function createFileTools(): ToolDefinition[] {
         if (occurrences > 1 && !replaceAll) {
           throw new ToolError(`old_string 匹配到 ${occurrences} 处，请提供更多上下文或设置 replace_all=true`)
         }
-        const updated = replaceAll ? parts.join(newString) : text.replace(oldString, newString)
+        const updated = replaceAll ? parts.join(newString) : text.replace(oldString, () => newString)
         await writeFile(target, updated, 'utf8')
         return textResult(
           `已编辑 ${displayPath(context.workspace, target)}，替换 ${replaceAll ? occurrences : 1} 处`,
@@ -280,6 +312,7 @@ export function createFileTools(): ToolDefinition[] {
       displayName: '删除文件',
       description: '删除工作区内的文件或文件夹。删除文件夹时必须设置 recursive=true。此操作不可恢复。',
       risk: 'write',
+      confirmInAuto: true,
       inputSchema: {
         type: 'object',
         properties: {
@@ -292,15 +325,21 @@ export function createFileTools(): ToolDefinition[] {
       summarize: (args) => `删除 ${stringArg(args, 'path') || '?'}`,
       execute: async (args, context) => {
         const input = stringArg(args, 'path', { required: true })
-        const target = await resolveWithinRoot(context.workspace, input)
+        const target = await resolveForMutation(context.workspace, input)
         if (await isWorkspaceRoot(context.workspace, target)) throw new ToolError('不能删除工作区根目录')
-        const info = await stat(target).catch(() => null)
+        const info = await lstat(target).catch(() => null)
         if (!info) throw new ToolError('路径不存在')
-        if (info.isDirectory() && !boolArg(args, 'recursive', false)) {
+        const isLink = info.isSymbolicLink()
+        const recursive = boolArg(args, 'recursive', false)
+        if (!isLink && info.isDirectory() && !recursive) {
           throw new ToolError('目标是非空文件夹，需设置 recursive=true')
         }
-        const removedLines = info.isFile() ? lineCount(await readFile(target, 'utf8').catch(() => '')) : 0
-        await rm(target, { recursive: boolArg(args, 'recursive', false), force: false })
+        const removedLines =
+          !isLink && info.isFile() && info.size <= MAX_READ
+            ? lineCount(await readFile(target, 'utf8').catch(() => ''))
+            : 0
+        if (isLink) await unlink(target)
+        else await rm(target, { recursive, force: false })
         return textResult(
           `已删除 ${displayPath(context.workspace, target)}`,
           false,
@@ -324,7 +363,10 @@ export function createFileTools(): ToolDefinition[] {
       },
       summarize: (args) => `移动 ${stringArg(args, 'source') || '?'} → ${stringArg(args, 'destination') || '?'}`,
       execute: async (args, context) => {
-        const source = await resolveWithinRoot(context.workspace, stringArg(args, 'source', { required: true }))
+        const source = await resolveForMutation(
+          context.workspace,
+          stringArg(args, 'source', { required: true })
+        )
         const destination = await resolveWithinRoot(
           context.workspace,
           stringArg(args, 'destination', { required: true })
@@ -357,7 +399,11 @@ export function createFileTools(): ToolDefinition[] {
       },
       summarize: (args) => `搜索 ${stringArg(args, 'query').slice(0, 60) || '?'}`,
       execute: async (args, context) => {
-        const query = stringArg(args, 'query', { required: true, max: 500 })
+        const query = stringArg(args, 'query', { required: true, max: 200 })
+        if (/\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*[+*{]/.test(query) ||
+          /(\\[wds]|\[[^\]]+\])\s*[+*]\s*[+*]/.test(query)) {
+          throw new ToolError('正则表达式包含可能导致灾难性回溯的嵌套量词')
+        }
         let regex: RegExp
         try {
           regex = new RegExp(query, boolArg(args, 'case_sensitive', false) ? 'g' : 'gi')
@@ -365,9 +411,12 @@ export function createFileTools(): ToolDefinition[] {
           throw new ToolError(`正则表达式无效：${error instanceof Error ? error.message : String(error)}`)
         }
         const base = await resolveWithinRoot(context.workspace, stringArg(args, 'path', { fallback: '.' }) || '.')
-        const pattern = stringArg(args, 'glob', { fallback: '' }).trim() || '**/*'
+        const pattern = stringArg(args, 'glob', { max: 500, fallback: '' }).trim() || '**/*'
         if (isAbsolute(pattern) || pattern.split(/[\\/]/).includes('..')) {
           throw new ToolError('glob 不能指向工作区之外')
+        }
+        if ((pattern.match(/[{[]/g)?.length ?? 0) > 16) {
+          throw new ToolError('glob 过于复杂')
         }
         const maxResults = numberArg(args, 'max_results', 60, 1, 200)
         const files = await fg(pattern, {
@@ -389,10 +438,11 @@ export function createFileTools(): ToolDefinition[] {
           scanned++
           const lines = buffer.toString('utf8').split(/\r?\n/)
           for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].length > 20_000 ? lines[i].slice(0, 20_000) : lines[i]
             regex.lastIndex = 0
-            if (regex.test(lines[i])) {
+            if (regex.test(line)) {
               results.push(
-                `${displayPath(context.workspace, file)}:${i + 1}: ${lines[i].trim().slice(0, 400)}`
+                `${displayPath(context.workspace, file)}:${i + 1}: ${line.trim().slice(0, 400)}`
               )
               if (results.length >= maxResults) break
             }

@@ -12,10 +12,13 @@
 
 - **本地桌面应用**：Electron + React，不依赖浏览器打开
 - **Agent 工具调用**：文件读写、精确编辑、搜索、PowerShell、系统信息、网页抓取
+- **浏览器控件**：本地读取页面及同源 iframe 的按钮/输入框/链接，支持精确点击、填充和表单自动补全；可读取发文标题并格式化为 Windows 安全文件名；模型有视觉时可选截图识别
+- **桌面控制**：像人一样操作——看一眼界面、点看到的东西、再输入。一次确认接管屏幕和鼠标，接管期间主窗口保持原大小并透明化、从截图中排除，物理鼠标锁定、操作目标高亮、高亮不被截图捕获、多显示器识别，视觉输入自动裁剪到前台窗口并缩放到 1920px（不会把多屏拼成巨图）、按描述直接点击所见控件（`screen_click_target`）、按文字点击（`screen_click`）、读取前台窗口文字及坐标（`screen_ocr`）、桌面截图视觉识别（`screen_vision`）、通用视觉操作（`screen_act`，支持点击/拖拽/输入/剪贴板文件/热键）、按标题切窗口（`window_focus`）、300ms 操作节奏、拟人点击、平滑移动、拖拽、滚轮和键盘输入，ESC 随时中止
+- **断网锁**：模型 API 仍可用，但禁止模型访问网页、浏览器导航、联网 MCP 和联网命令
 - **多模型配置**：OpenAI 兼容接口 / Anthropic Messages，支持读取 `/models`
-- **流式输出**：思考过程、工具步骤、执行结果实时显示
+- **流式输出**：思考过程、工具步骤、执行结果实时显示；检测到模型重复段落时自动停止
 - **对话与工作区**：一个工作区对应一个项目，对话记录独立保存
-- **附件**：文本、图片、PDF；支持 Windows OCR
+- **附件**：文本、图片、PDF；默认 RapidOCRLite 原生引擎（PP-OCRv6 small），Windows OCR 自动回退，返回文字与坐标
 - **权限审批**：写文件、执行命令、访问网络、调用 MCP 前可确认
 - **内置 MCP**：Python、Excel、Word、PPT、PDF、图片处理
 - **便携 Python**：随项目下载，不依赖用户电脑安装办公库
@@ -306,8 +309,8 @@ npm.cmd run installer
 
 ```text
 output/
-  HuaqiangAgent-1.0.3-portable.exe
-  HuaqiangAgent-1.0.3-setup.exe
+  HuaqiangAgent-1.0.4-portable.exe
+  HuaqiangAgent-1.0.4-setup.exe
   win-unpacked/
 ```
 

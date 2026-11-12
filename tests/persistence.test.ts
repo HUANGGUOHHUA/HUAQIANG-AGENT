@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import { SettingsStore } from '../app/src/main/settings'
@@ -42,6 +42,7 @@ describe('settings persistence', () => {
     const defaults = store.getPublic()
     expect(defaults.activeProfileId).toBe('custom')
     expect(defaults.maxSteps).toBe(0)
+    expect(defaults.networkLocked).toBe(false)
     expect(defaults.profiles[0]).toMatchObject({
       id: 'custom',
       name: '通用接口',
@@ -74,6 +75,7 @@ describe('settings persistence', () => {
       workspace,
       approvalMode: 'auto',
       maxSteps: 30,
+      networkLocked: true,
       mcpServers: [],
       systemPromptExtra: '项目规范'
     })
@@ -86,6 +88,7 @@ describe('settings persistence', () => {
     expect(publicSettings.profiles[0].contextWindow).toBe(128000)
     expect(publicSettings.workspace).toBe(workspace)
     expect(publicSettings.approvalMode).toBe('auto')
+    expect(publicSettings.networkLocked).toBe(true)
     expect(publicSettings.systemPromptExtra).toBe('项目规范')
   })
 
@@ -130,6 +133,72 @@ describe('settings persistence', () => {
     expect(publicSettings.profiles[1].name).toBe('备用配置')
     expect(publicSettings.profiles[1].vision).toBe(true)
     expect(reloaded.getProfileById('profile-b')?.apiKey).toBe('sk-test-b')
+  })
+
+  it('falls back to defaults when profile numbers are null', () => {
+    const store = new SettingsStore()
+    store.save({
+      profiles: [
+        {
+          id: 'null-profile',
+          name: '空值配置',
+          provider: 'openai',
+          baseUrl: 'https://api.example.com/v1',
+          model: 'demo',
+          contextWindow: null as unknown as number,
+          temperature: null as unknown as number,
+          maxTokens: null as unknown as number
+        }
+      ],
+      activeProfileId: 'null-profile',
+      workspace,
+      approvalMode: 'ask',
+      maxSteps: 0,
+      mcpServers: [],
+      systemPromptExtra: ''
+    })
+    const saved = store.getPublic().profiles[0]
+    expect(saved.contextWindow).toBe(128_000)
+    expect(saved.maxTokens).toBe(8_192)
+    expect(saved.temperature).toBe(0.3)
+  })
+
+  it('backs up a broken settings.json instead of overwriting it', () => {
+    writeFileSync(join(dataDir, 'settings.json'), '{ broken json', 'utf8')
+    const store = new SettingsStore()
+    expect(store.getPublic().activeProfileId).toBe('custom')
+    const backups = readdirSync(dataDir).filter((name) =>
+      name.startsWith('settings.json.broken-')
+    )
+    expect(backups.length).toBeGreaterThan(0)
+  })
+
+  it('does not leave temporary settings files after saving', () => {
+    const store = new SettingsStore()
+    store.save({
+      profiles: [
+        {
+          id: 'temp-profile',
+          name: '临时文件',
+          provider: 'openai',
+          baseUrl: 'https://api.example.com/v1',
+          model: 'demo',
+          contextWindow: 128_000,
+          temperature: 0.2,
+          maxTokens: 4_096
+        }
+      ],
+      activeProfileId: 'temp-profile',
+      workspace,
+      approvalMode: 'ask',
+      maxSteps: 0,
+      mcpServers: [],
+      systemPromptExtra: ''
+    })
+    const leftovers = readdirSync(dataDir).filter(
+      (name) => name.startsWith('.settings-') && name.endsWith('.tmp')
+    )
+    expect(leftovers).toHaveLength(0)
   })
 })
 
@@ -202,5 +271,97 @@ describe('conversation persistence', () => {
     expect(loaded?.stats?.llmMs).toBe(5000)
     expect(loaded?.messages).toHaveLength(2)
     expect(loaded?.messages[1].content).toContain('保存后的回复')
+  })
+
+  it('saves an oversized image conversation by dropping old image payloads', async () => {
+    const store = new SessionStore()
+    const payload = `data:image/png;base64,${'A'.repeat(7_500_000)}`
+    const session: ChatSession = {
+      id: 'session-large-1',
+      title: '大附件会话',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      workspace,
+      messages: [
+        {
+          id: 'large-user',
+          role: 'user',
+          content: '三张图',
+          createdAt: Date.now(),
+          attachments: [
+            { path: 'a.png', kind: 'image', mime: 'image/png', dataUrl: payload },
+            { path: 'b.png', kind: 'image', mime: 'image/png', dataUrl: payload },
+            { path: 'c.png', kind: 'image', mime: 'image/png', dataUrl: payload }
+          ]
+        }
+      ]
+    }
+
+    await store.save(session)
+    const loaded = await store.load(session.id)
+    expect(loaded?.messages[0].attachments).toHaveLength(3)
+    const withData =
+      loaded?.messages[0].attachments?.filter((item) => Boolean(item.dataUrl)) ?? []
+    expect(withData.length).toBeGreaterThan(0)
+    expect(withData.length).toBeLessThan(3)
+  })
+
+  it('serializes concurrent saves so the last snapshot wins', async () => {
+    const store = new SessionStore()
+    const base: ChatSession = {
+      id: 'session-race-1',
+      title: '竞态',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      workspace,
+      messages: []
+    }
+    const first: ChatSession = {
+      ...base,
+      messages: [{ id: 'race-1', role: 'user', content: 'first', createdAt: Date.now() }]
+    }
+    const second: ChatSession = {
+      ...base,
+      messages: [{ id: 'race-2', role: 'user', content: 'second', createdAt: Date.now() }]
+    }
+    await Promise.all([store.save(first), store.save(second)])
+    const loaded = await store.load(base.id)
+    expect(loaded?.messages[0].content).toBe('second')
+  })
+
+  it('keeps output-only token usage', async () => {
+    const store = new SessionStore()
+    const session: ChatSession = {
+      id: 'session-output-usage',
+      title: '输出统计',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      workspace,
+      tokenUsage: {
+        inputTokens: 0,
+        outputTokens: 10,
+        totalTokens: 0,
+        cacheReadTokens: 0,
+        cacheMissTokens: 0,
+        cacheCreationTokens: 0
+      },
+      messages: [{ id: 'output-usage-1', role: 'user', content: 'hi', createdAt: Date.now() }]
+    }
+    await store.save(session)
+    const loaded = await store.load(session.id)
+    expect(loaded?.tokenUsage?.outputTokens).toBe(10)
+  })
+
+  it('normalizes non-numeric session timestamps', async () => {
+    const store = new SessionStore()
+    const id = 'session-bad-time'
+    writeFileSync(
+      join(dataDir, 'conversations', `${id}.json`),
+      JSON.stringify({ id, title: '坏时间', createdAt: 'bad', updatedAt: 'bad', messages: [] })
+    )
+    const list = await store.list()
+    const meta = list.find((item) => item.id === id)
+    expect(typeof meta?.createdAt).toBe('number')
+    expect(typeof meta?.updatedAt).toBe('number')
   })
 })

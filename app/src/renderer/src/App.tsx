@@ -29,7 +29,8 @@ import type {
 import type { SettingsTab } from './components/SettingsModal'
 import type { LiveMessage, ToastMessage } from './types'
 import { cn, deriveTitle, isImagePath, isTextPreviewPath, stripIpcError, uid } from './lib/utils'
-import { mergeStats, mergeUsage } from './lib/usage'
+import { toSaveInput } from './lib/settings-form'
+import { createAgentEventHandler } from './lib/agent-events'
 import { compactMessages, parseSlashCommand, sessionMarkdown } from './lib/slash-commands'
 import { createZipBytes } from './lib/zip'
 import {
@@ -67,29 +68,6 @@ function createSession(workspace?: string): ChatSession {
   }
 }
 
-function toSaveInput(settings: UiSettings, overrides: Partial<SettingsSaveInput> = {}): SettingsSaveInput {
-  return {
-    profiles: settings.profiles.map((profile) => ({
-      id: profile.id,
-      name: profile.name,
-      provider: profile.provider,
-      baseUrl: profile.baseUrl,
-      model: profile.model,
-      contextWindow: profile.contextWindow,
-      temperature: profile.temperature,
-      maxTokens: profile.maxTokens
-    })),
-    activeProfileId: settings.activeProfileId,
-    workspace: settings.workspace,
-    elevateOnStart: settings.elevateOnStart,
-    agentElevated: settings.agentElevated,
-    approvalMode: settings.approvalMode,
-    maxSteps: settings.maxSteps,
-    mcpServers: settings.mcpServers,
-    systemPromptExtra: settings.systemPromptExtra,
-    ...overrides
-  }
-}
 
 function Toast({
   toast,
@@ -150,10 +128,13 @@ export default function App(): React.JSX.Element {
   const liveFlushTimer = useRef<number | null>(null)
   const toastTimer = useRef<number | null>(null)
   const submitRef = useRef<
-    (text: string, runAttachments: AttachmentPayload[]) => void
-  >(() => undefined)
+    (text: string, runAttachments: AttachmentPayload[], skipAutoCompact?: boolean) => boolean
+  >(() => false)
   const queueBusyRef = useRef(false)
   const autoCompactLockRef = useRef(false)
+  const sessionLoadSeqRef = useRef(0)
+  const sessionSelectChainRef = useRef<Promise<void>>(Promise.resolve())
+  const mcpRefreshTimersRef = useRef<number[]>([])
 
   const showToast = useCallback((type: ToastMessage['type'], message: string): void => {
     const id = uid()
@@ -300,209 +281,31 @@ export default function App(): React.JSX.Element {
     return unsubscribe
   }, [])
 
+  const agentEventRef = useRef<(event: AgentEvent) => void>(() => undefined)
+  agentEventRef.current = createAgentEventHandler({
+    runIdRef,
+    lastRunIdRef,
+    getLive: () => liveRef.current,
+    setLiveNow: publishLive,
+    updateLive: (next) => {
+      liveRef.current = next
+    },
+    flushLive: scheduleLiveFlush,
+    getSession: () => sessionRef.current,
+    commitSession,
+    persistSession: (next) => void persistSession(next),
+    showToast,
+    setApproval,
+    setUsage,
+    setRunning,
+    setRunError,
+    setMcpStatuses
+  })
+
   useEffect(() => {
-    const unsubscribe = window.hq.onAgentEvent((event: AgentEvent) => {
-      if (event.type === 'mcp-status') {
-        setMcpStatuses(event.statuses)
-        return
-      }
-      const isCurrentRun = runIdRef.current === event.runId
-      const isLateFinal =
-        runIdRef.current === null &&
-        lastRunIdRef.current === event.runId &&
-        (event.type === 'assistant-end' || event.type === 'run-end')
-      if (!isCurrentRun && !isLateFinal) return
-      switch (event.type) {
-        case 'notice': {
-          showToast('info', event.message)
-          break
-        }
-        case 'assistant-start': {
-          publishLive({
-            id: event.messageId,
-            role: 'assistant',
-            content: '',
-            reasoning: '',
-            toolCalls: [],
-            createdAt: Date.now()
-          })
-          break
-        }
-        case 'text-delta': {
-          const current = liveRef.current
-          if (current && current.id === event.messageId) {
-            liveRef.current = { ...current, content: current.content + event.delta }
-            scheduleLiveFlush()
-          }
-          break
-        }
-        case 'reasoning-delta': {
-          const current = liveRef.current
-          if (current && current.id === event.messageId) {
-            liveRef.current = { ...current, reasoning: current.reasoning + event.delta }
-            scheduleLiveFlush()
-          }
-          break
-        }
-        case 'tool-draft': {
-          const current = liveRef.current
-          if (current && current.id === event.messageId) {
-            liveRef.current = {
-              ...current,
-              toolDraft: { name: event.name, chars: event.chars }
-            }
-            scheduleLiveFlush()
-          }
-          break
-        }
-        case 'tool-start': {
-          const current = liveRef.current
-          if (!current || current.id !== event.messageId) break
-          if (current.toolCalls.some((call) => call.id === event.callId)) break
-          publishLive({
-            ...current,
-            toolDraft: undefined,
-            toolCalls: [
-              ...current.toolCalls,
-              {
-                id: event.callId,
-                name: event.name,
-                displayName: event.displayName,
-                risk: event.risk,
-                args: event.args,
-                status: 'running',
-                startedAt: Date.now()
-              }
-            ]
-          })
-          break
-        }
-        case 'tool-output': {
-          const current = liveRef.current
-          if (!current || current.id !== event.messageId) break
-          publishLive({
-            ...current,
-            toolCalls: current.toolCalls.map((call) =>
-              call.id === event.callId
-                ? { ...call, result: `${call.result ?? ''}${event.delta}` }
-                : call
-            )
-          })
-          break
-        }
-        case 'tool-end': {
-          const current = liveRef.current
-          if (!current || current.id !== event.messageId) break
-          publishLive({
-            ...current,
-            toolCalls: current.toolCalls.map((call) =>
-              call.id === event.callId
-                ? {
-                    ...call,
-                    status: event.status,
-                    result: event.result,
-                    isError: event.isError,
-                    stats: event.stats,
-                    endedAt: Date.now()
-                  }
-                : call
-            )
-          })
-          break
-        }
-        case 'assistant-end': {
-          const current = sessionRef.current
-          const alreadySaved = current.messages.some((message) => message.id === event.message.id)
-          const next: ChatSession = {
-            ...current,
-            title:
-              current.title === '新对话' && current.messages.some((message) => message.role === 'user')
-                ? deriveTitle(current.messages.find((message) => message.role === 'user')?.content ?? '')
-                : current.title,
-            messages: alreadySaved
-              ? current.messages.map((message) =>
-                  message.id === event.message.id ? event.message : message
-                )
-              : [...current.messages, event.message],
-            updatedAt: Date.now()
-          }
-          commitSession(next)
-          publishLive(null)
-          // Persist as soon as the assistant message is complete, not only when
-          // the whole run finishes, so a crash/close cannot drop the reply.
-          void persistSession(next)
-          break
-        }
-        case 'approval-request':
-          setApproval(event.request)
-          break
-        case 'approval-closed':
-          setApproval((current) => (current?.id === event.requestId ? null : current))
-          break
-        case 'usage':
-          setUsage(event.usage)
-          break
-        case 'context-compressed':
-          showToast('info', `上下文过长，已压缩 ${event.dropped} 条较早消息`)
-          break
-        case 'run-end': {
-          const pending = liveRef.current
-          const currentSession = sessionRef.current
-          const sessionWithUsage: ChatSession = {
-            ...currentSession,
-            tokenUsage: mergeUsage(currentSession.tokenUsage, event.usage),
-            stats: mergeStats(currentSession.stats, event.stats)
-          }
-          const hasPendingMessage =
-            pending &&
-            !currentSession.messages.some((message) => message.id === pending.id) &&
-            (pending.content.trim() ||
-              (pending.reasoning ?? '').trim() ||
-              pending.toolCalls.length > 0)
-          if (pending && hasPendingMessage) {
-            const next: ChatSession = {
-              ...sessionWithUsage,
-              title:
-                currentSession.title === '新对话' &&
-                currentSession.messages.some((message) => message.role === 'user')
-                  ? deriveTitle(
-                      currentSession.messages.find((message) => message.role === 'user')?.content ??
-                        ''
-                    )
-                  : currentSession.title,
-              messages: [...currentSession.messages, pending],
-              updatedAt: Date.now()
-            }
-            commitSession(next)
-            void persistSession(next)
-          } else if (event.usage || event.stats) {
-            commitSession(sessionWithUsage)
-            void persistSession(sessionWithUsage)
-          }
-          setRunning(false)
-          publishLive(null)
-          setApproval(null)
-          const currentRun = runIdRef.current
-          runIdRef.current = null
-          if (event.status === 'aborted') {
-            showToast('info', '任务已停止')
-            setRunError(null)
-          } else if (event.status === 'error') {
-            const last = sessionRef.current.messages[sessionRef.current.messages.length - 1]
-            if (!last?.error) setRunError(event.error ?? '运行未完成')
-          } else {
-            setRunError(null)
-          }
-          if (event.usage) setUsage(event.usage)
-          if (currentRun) void persistSession(sessionRef.current)
-          break
-        }
-        case 'run-start':
-          break
-      }
-    })
+    const unsubscribe = window.hq.onAgentEvent((event: AgentEvent) => agentEventRef.current(event))
     return unsubscribe
-  }, [commitSession, persistSession, showToast])
+  }, [])
 
   const activeProfile: ApiProfile | undefined =
     settings?.profiles.find((profile) => profile.id === settings.activeProfileId) ??
@@ -657,8 +460,14 @@ export default function App(): React.JSX.Element {
   // collide when adding or removing.
   const attachmentKeyOf = (item: AttachmentPayload): string => item.id ?? item.path
 
+  const attachmentEpochRef = useRef(0)
+  const attachmentsRef = useRef<AttachmentPayload[]>([])
+  useEffect(() => {
+    attachmentsRef.current = attachments
+  }, [attachments])
+
   const addAttachments = (incoming: AttachmentPayload[]): number => {
-    const current = attachments
+    const current = attachmentsRef.current
     const next = [...current]
     let added = 0
     let imageChars = attachmentsImageChars(current)
@@ -684,8 +493,10 @@ export default function App(): React.JSX.Element {
   }
 
   const pickAttachments = async (): Promise<void> => {
+    const epoch = attachmentEpochRef.current
     try {
       const picked = await window.hq.pickAttachments()
+      if (epoch !== attachmentEpochRef.current) return
       if (!picked.length) return
       const added = addAttachments(picked)
       showToast(
@@ -699,8 +510,10 @@ export default function App(): React.JSX.Element {
 
   const pasteFromClipboard = async (files: File[]): Promise<void> => {
     if (!files.length) return
+    const epoch = attachmentEpochRef.current
     try {
       const items = await filesToAttachments(files)
+      if (epoch !== attachmentEpochRef.current) return
       if (!items.length) {
         showToast('error', '粘贴的内容无法识别为图片或文本文件')
         return
@@ -717,6 +530,7 @@ export default function App(): React.JSX.Element {
 
   const dropFiles = async (files: File[]): Promise<void> => {
     if (!files.length) return
+    const epoch = attachmentEpochRef.current
     const paths: string[] = []
     const blobs: File[] = []
     for (const file of files) {
@@ -729,28 +543,34 @@ export default function App(): React.JSX.Element {
       if (path) paths.push(path)
       else blobs.push(file)
     }
+    const incoming: AttachmentPayload[] = []
+    let errors: string[] = []
     if (paths.length > 0) {
       try {
-        const { attachments: dropped, errors } = await window.hq.readDroppedAttachments(paths)
-        const prepared = await Promise.all(dropped.map(shrinkImageAttachment))
-        const added = addAttachments(prepared)
-        if (added > 0) {
-          showToast('success', `已附加 ${added} 个文件`)
-        } else if (errors.length > 0) {
-          showToast('error', `无法读取：${errors[0]}`)
-        } else if (prepared.length > 0) {
-          showToast('info', '这些文件已在附件里，或附件已满 8 个')
-        }
+        const result = await window.hq.readDroppedAttachments(paths)
+        const prepared = await Promise.all(result.attachments.map(shrinkImageAttachment))
+        if (epoch !== attachmentEpochRef.current) return
+        incoming.push(...prepared)
+        errors = result.errors
       } catch (error) {
         showToast('error', stripIpcError(String(error)))
       }
     }
     if (blobs.length > 0) {
-      const items = await filesToAttachments(blobs)
-      if (items.length) {
-        const added = addAttachments(items)
-        if (added > 0) showToast('success', `已附加 ${added} 个文件`)
-      }
+      const prepared = await filesToAttachments(blobs)
+      if (epoch !== attachmentEpochRef.current) return
+      incoming.push(...prepared)
+    }
+    if (!incoming.length) {
+      if (errors.length > 0) showToast('error', `无法读取：${errors[0]}`)
+      return
+    }
+    if (epoch !== attachmentEpochRef.current) return
+    const added = addAttachments(incoming)
+    if (added > 0) {
+      showToast('success', `已附加 ${added} 个文件`)
+    } else {
+      showToast('info', '这些文件已在附件里，或附件已满 8 个')
     }
   }
 
@@ -1110,12 +930,12 @@ export default function App(): React.JSX.Element {
     text: string,
     runAttachments: AttachmentPayload[],
     skipAutoCompact = false
-  ): void => {
-    if (!settings) return
+  ): boolean => {
+    if (!settings) return false
     if (!activeProfile || !activeProfile.baseUrl.trim() || !activeProfile.model.trim()) {
       showToast('info', '请先在设置中填写 Base URL 并读取或填写 Model ID')
       openSettings('model')
-      return
+      return false
     }
     if (
       !skipAutoCompact &&
@@ -1135,7 +955,7 @@ export default function App(): React.JSX.Element {
           autoCompactLockRef.current = false
           submitMessage(text, runAttachments, true)
         })
-      return
+      return true
     }
     const userMessage: AppMessage = {
       id: uid(),
@@ -1158,6 +978,7 @@ export default function App(): React.JSX.Element {
       updatedAt: Date.now()
     }
     beginRun(next, runAttachments)
+    return true
   }
 
   submitRef.current = submitMessage
@@ -1192,11 +1013,21 @@ export default function App(): React.JSX.Element {
     queueBusyRef.current = true
     const first = queue[0]
     setQueue((current) => current.slice(1))
-    submitRef.current(first.text, first.attachments)
+    const accepted = submitRef.current(first.text, first.attachments)
     window.setTimeout(() => {
+      if (!accepted) {
+        setQueue((current) => [first, ...current])
+        showToast('info', '排队消息暂未发送，请检查模型配置')
+        window.setTimeout(() => {
+          queueBusyRef.current = false
+          setQueue((current) => [...current])
+        }, 5000)
+        return
+      }
       queueBusyRef.current = false
+      setQueue((current) => [...current])
     }, 0)
-  }, [running, compactBusy, settings, queue])
+  }, [running, compactBusy, settings, queue, showToast])
 
   const retryLast = (): void => {
     if (running || compactBusy) {
@@ -1221,7 +1052,7 @@ export default function App(): React.JSX.Element {
       lastChanges: undefined,
       updatedAt: Date.now()
     }
-    beginRun(next, [])
+    beginRun(next, messages[index]?.attachments ?? [])
   }
 
   const stopRun = (): void => {
@@ -1257,6 +1088,7 @@ export default function App(): React.JSX.Element {
   }
 
   const newChat = (): void => {
+    attachmentEpochRef.current += 1
     if (running || compactBusy) {
       showToast('info', running ? '请先停止当前任务' : '正在压缩上下文，请稍候')
       return
@@ -1273,20 +1105,23 @@ export default function App(): React.JSX.Element {
     requestAnimationFrame(() => document.getElementById('composer-input')?.focus())
   }
 
-  const selectSession = async (id: string): Promise<void> => {
+  const doSelectSession = async (id: string, seq: number): Promise<void> => {
     if (running || compactBusy) {
       showToast('info', running ? '请先停止当前任务' : '正在压缩上下文，请稍候')
       return
     }
     if (id === activeId) return
+
     try {
       const loaded = await window.hq.loadSession(id)
+      if (seq !== sessionLoadSeqRef.current) return
       if (!loaded) {
         showToast('error', '会话不存在或已损坏')
         return
       }
       if (settings && loaded.workspace && loaded.workspace !== settings.workspace) {
         const updated = await saveSettings(toSaveInput(settings, { workspace: loaded.workspace }))
+        if (seq !== sessionLoadSeqRef.current) return
         if (!updated) return
       }
       commitSession(loaded)
@@ -1299,6 +1134,17 @@ export default function App(): React.JSX.Element {
     } catch (error) {
       showToast('error', stripIpcError(String(error)))
     }
+  }
+
+  const selectSession = (id: string): Promise<void> => {
+    attachmentEpochRef.current += 1
+    const seq = ++sessionLoadSeqRef.current
+    const task = sessionSelectChainRef.current.then(
+      () => doSelectSession(id, seq),
+      () => doSelectSession(id, seq)
+    )
+    sessionSelectChainRef.current = task.catch(() => undefined)
+    return task
   }
 
   const deleteSession = async (id: string): Promise<void> => {
@@ -1356,13 +1202,23 @@ export default function App(): React.JSX.Element {
     setSettings(updated)
     setSettingsOpen(false)
     showToast('success', '设置已保存')
-    window.setTimeout(() => {
-      void window.hq.mcpStatuses().then(setMcpStatuses).catch(() => undefined)
-    }, 700)
-    window.setTimeout(() => {
-      void window.hq.mcpStatuses().then(setMcpStatuses).catch(() => undefined)
-    }, 2800)
+    for (const timer of mcpRefreshTimersRef.current) window.clearTimeout(timer)
+    mcpRefreshTimersRef.current = [
+      window.setTimeout(() => {
+        void window.hq.mcpStatuses().then(setMcpStatuses).catch(() => undefined)
+      }, 700),
+      window.setTimeout(() => {
+        void window.hq.mcpStatuses().then(setMcpStatuses).catch(() => undefined)
+      }, 2800)
+    ]
   }
+
+  useEffect(
+    () => () => {
+      for (const timer of mcpRefreshTimersRef.current) window.clearTimeout(timer)
+    },
+    []
+  )
 
   const refreshMcp = async (): Promise<void> => {
     showToast('info', '正在重新连接 MCP 服务…')
@@ -1375,22 +1231,25 @@ export default function App(): React.JSX.Element {
     }
   }
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      const mod = event.ctrlKey || event.metaKey
-      if (!mod) return
-      if (event.key.toLowerCase() === 'n' && !settingsOpen && !approval) {
-        event.preventDefault()
-        newChat()
-      }
-      if (event.key === ',' && !settingsOpen) {
-        event.preventDefault()
-        openSettings('model')
-      }
+  const shortcutHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined)
+  shortcutHandlerRef.current = (event: KeyboardEvent): void => {
+    const mod = event.ctrlKey || event.metaKey
+    if (!mod) return
+    if (event.key.toLowerCase() === 'n' && !settingsOpen && !approval) {
+      event.preventDefault()
+      newChat()
     }
+    if (event.key === ',' && !settingsOpen) {
+      event.preventDefault()
+      openSettings('model')
+    }
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => shortcutHandlerRef.current(event)
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  })
+  }, [])
 
   if (booting) {
     return (

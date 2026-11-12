@@ -35,7 +35,7 @@ function escapePs(text: string): string {
 /** 资源管理器窗口打开后将其置顶并激活。尽力而为：任何失败都不影响打开本身。 */
 export function focusExplorerWindow(target: string): void {
   try {
-    const script = PS_SCRIPT.replace('__TARGET__', escapePs(target))
+    const script = PS_SCRIPT.replace('__TARGET__', () => escapePs(target))
     const encoded = Buffer.from(script, 'utf16le').toString('base64')
     const child = spawn(
       'powershell.exe',

@@ -1,6 +1,11 @@
 import os from 'node:os'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import type { ToolDefinition } from './types'
 import { ToolError, stringArg, truncate } from './types'
+
+const MAX_BODY_BYTES = 5 * 1024 * 1024
+const MAX_REDIRECTS = 5
 
 function decodeEntities(value: string): string {
   return value
@@ -41,6 +46,94 @@ function htmlToText(html: string): { title: string; text: string } {
       .replace(/\n{3,}/g, '\n\n')
       .trim()
   }
+}
+
+/** Private, loopback and link-local addresses must not be reachable by the model. */
+export function isBlockedAddress(address: string): boolean {
+  const value = address.toLowerCase().replace(/^\[|\]$/g, '')
+  if (value === '::' || value === '::1' || value === '0.0.0.0') return true
+  if (value.startsWith('::ffff:')) return isBlockedAddress(value.slice(7))
+  if (value.startsWith('fe80:') || value.startsWith('fc') || value.startsWith('fd')) return true
+  if (isIP(value) !== 4) return false
+  const parts = value.split('.').map(Number)
+  const [a, b] = parts
+  if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return true
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  )
+}
+
+async function assertPublicUrl(url: URL): Promise<void> {
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new ToolError('仅支持 http/https 链接')
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, '')
+  if (!host || /^(localhost|.*\.local|.*\.internal)$/i.test(host)) {
+    throw new ToolError('不允许访问本机或内网地址')
+  }
+  if (isIP(host)) {
+    if (isBlockedAddress(host)) throw new ToolError('不允许访问本机或内网地址')
+    return
+  }
+  const addresses = await lookup(host, { all: true }).catch(() => [])
+  if (!addresses.length) throw new ToolError(`无法解析域名：${host}`)
+  if (addresses.some((item) => isBlockedAddress(item.address))) {
+    throw new ToolError('不允许访问本机或内网地址')
+  }
+}
+
+async function fetchPublic(url: URL, signal: AbortSignal): Promise<Response> {
+  let current = url
+  for (let redirects = 0; redirects < MAX_REDIRECTS; redirects++) {
+    await assertPublicUrl(current)
+    const response = await fetch(current, {
+      signal,
+      redirect: 'manual',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HuaqiangAgent/1.0',
+        Accept: 'text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.5'
+      }
+    })
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location')
+      await response.body?.cancel().catch(() => undefined)
+      if (!location) return response
+      current = new URL(location, current)
+      continue
+    }
+    return response
+  }
+  throw new ToolError('重定向次数过多')
+}
+
+async function readLimitedText(response: Response, limit: number): Promise<string> {
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (total + value.length >= limit) {
+        chunks.push(value.subarray(0, limit - total))
+        await reader.cancel().catch(() => undefined)
+        break
+      }
+      chunks.push(value)
+      total += value.length
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8')
 }
 
 export const systemInfoTool: ToolDefinition = {
@@ -99,20 +192,15 @@ export const webFetchTool: ToolDefinition = {
     const onAbort = (): void => controller.abort()
     context.signal.addEventListener('abort', onAbort)
     try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        redirect: 'follow',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HuaqiangAgent/1.0',
-          Accept: 'text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.5'
-        }
-      })
+      // Validate the first hop before any request is sent, then every redirect.
+      await assertPublicUrl(url)
+      const response = await fetchPublic(url, controller.signal)
       const contentType = (response.headers.get('content-type') || '').toLowerCase()
       if (contentType.includes('application/pdf') || contentType.startsWith('image/')) {
+        await response.body?.cancel().catch(() => undefined)
         throw new ToolError(`暂不支持直接解析该类型内容（${contentType}）`)
       }
-      const raw = (await response.text()).slice(0, 5 * 1024 * 1024)
+      const raw = await readLimitedText(response, MAX_BODY_BYTES)
       let body = raw
       let title = ''
       if (contentType.includes('text/html') || raw.trimStart().startsWith('<')) {

@@ -18,6 +18,10 @@ declare global {
     reload: () => void
     stop: () => void
     executeJavaScript: (code: string) => Promise<unknown>
+    capturePage: () => Promise<{
+      toDataURL: () => string
+      getSize: () => { width: number; height: number }
+    }>
     findInPage: (text: string, options?: { forward?: boolean; findNext?: boolean }) => number
     stopFindInPage: (action: 'clearSelection' | 'keepSelection' | 'activateSelection') => void
   }

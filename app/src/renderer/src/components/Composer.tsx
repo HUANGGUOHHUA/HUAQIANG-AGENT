@@ -149,6 +149,7 @@ export default function Composer({
   const popoverRef = useRef<HTMLDivElement>(null)
   const [menuIndex, setMenuIndex] = useState(0)
   const [menuDismissed, setMenuDismissed] = useState(false)
+  const dismissedValueRef = useRef<string | null>(null)
   const [plusOpen, setPlusOpen] = useState(false)
   const [permissionOpen, setPermissionOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
@@ -197,7 +198,13 @@ export default function Composer({
       ? value.slice(1).toLowerCase()
       : null
   const matches = commandQuery === null ? [] : filterCommands(commandQuery)
-  const menuOpen = !running && !busy && commandQuery !== null && !menuDismissed && matches.length > 0
+  const menuOpen =
+    !running &&
+    !busy &&
+    commandQuery !== null &&
+    !menuDismissed &&
+    value !== dismissedValueRef.current &&
+    matches.length > 0
 
   useEffect(() => {
     setMenuDismissed(false)
@@ -206,7 +213,9 @@ export default function Composer({
 
   const chooseCommand = (command: SlashCommandDefinition): void => {
     const needsArgument = command.name === 'compact' || command.name === 'file'
-    onChange(`/${command.name}${needsArgument ? ' ' : ''}`)
+    const nextValue = `/${command.name}${needsArgument ? ' ' : ''}`
+    dismissedValueRef.current = nextValue
+    onChange(nextValue)
     setMenuDismissed(true)
     window.requestAnimationFrame(() => textareaRef.current?.focus())
   }
@@ -219,7 +228,10 @@ export default function Composer({
   }, [value])
 
   useEffect(() => {
-    if (!running && !busy) textareaRef.current?.focus()
+    if (running || busy) return
+    const active = document.activeElement
+    if (active && active !== document.body && active !== textareaRef.current) return
+    textareaRef.current?.focus()
   }, [running, busy])
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {

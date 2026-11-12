@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Copy, ExternalLink, Globe, House, LoaderCircle, Plus, RotateCw, Search, X } from 'lucide-react'
 import type { BrowserCommand } from '../../../shared/types'
 import { cn, uid } from '../lib/utils'
+import { executeBrowserCommand } from '../lib/browser-command'
 
 const START_PAGE =
   'data:text/html;charset=utf-8,' +
@@ -42,42 +43,6 @@ const START_PAGE =
 </div>
 </body>
 </html>`)
-
-const SNAPSHOT_SCRIPT = `(() => {
-  const selector = "a,button,input,textarea,select,[role='button'],[onclick]"
-  document.querySelectorAll('[data-hq-idx]').forEach((el) => el.removeAttribute('data-hq-idx'))
-  const visible = (el) => {
-    const rect = el.getBoundingClientRect()
-    if (!rect.width || !rect.height) return false
-    const style = window.getComputedStyle(el)
-    return style.display !== 'none' && style.visibility !== 'hidden'
-  }
-  const elements = []
-  for (const el of document.querySelectorAll(selector)) {
-    if (elements.length >= 80) break
-    if (!visible(el)) continue
-    const index = elements.length
-    el.setAttribute('data-hq-idx', String(index))
-    const item = {
-      index,
-      tag: el.tagName.toLowerCase(),
-      text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80)
-    }
-    const href = el.getAttribute('href')
-    if (href) item.href = href
-    const type = el.getAttribute('type')
-    if (type) item.type = type
-    const placeholder = el.getAttribute('placeholder')
-    if (placeholder) item.placeholder = placeholder
-    elements.push(item)
-  }
-  return {
-    url: location.href,
-    title: document.title,
-    text: (document.body ? document.body.innerText : '').slice(0, 4000),
-    elements
-  }
-})()`
 
 interface BrowserTab {
   id: string
@@ -136,12 +101,6 @@ function resolveTarget(raw: string): string {
   return `https://www.baidu.com/s?wd=${encodeURIComponent(value)}`
 }
 
-function commandIndex(params: Record<string, unknown>): number {
-  const index = Number(params.index)
-  if (!Number.isInteger(index) || index < 0) throw new Error('无效的元素序号')
-  return index
-}
-
 interface BrowserTabViewProps {
   tab: BrowserTab
   active: boolean
@@ -161,6 +120,14 @@ function BrowserTabView({
 }: BrowserTabViewProps): React.JSX.Element {
   const webviewRef = useRef<HqWebviewElement | null>(null)
   const tabId = tab.id
+
+  const setWebviewRef = useCallback(
+    (node: HqWebviewElement | null): void => {
+      webviewRef.current = node
+      registerView(tabId, node)
+    },
+    [tabId, registerView]
+  )
 
   useEffect(() => {
     const view = webviewRef.current
@@ -214,10 +181,7 @@ function BrowserTabView({
 
   return (
     <webview
-      ref={(node) => {
-        webviewRef.current = node as HqWebviewElement | null
-        registerView(tabId, webviewRef.current)
-      }}
+      ref={setWebviewRef}
       className={cn('browser-webview', !active && 'browser-webview-hidden')}
       style={{ flex: 1 }}
       partition="persist:hqbrowser"
@@ -307,10 +271,10 @@ export default function BrowserPane(): React.JSX.Element {
       viewWaiters.current.set(id, waiters)
       window.setTimeout(() => {
         const list = viewWaiters.current.get(id)
-        if (list) {
-          viewWaiters.current.delete(id)
-          list.splice(0, list.length)
-        }
+        if (!list) return
+        const index = list.indexOf(resolve)
+        if (index >= 0) list.splice(index, 1)
+        if (!list.length) viewWaiters.current.delete(id)
         reject(new Error('浏览器标签页尚未就绪'))
       }, 5_000)
     })
@@ -426,136 +390,12 @@ export default function BrowserPane(): React.JSX.Element {
         })
         return
       }
-      const params = cmd.params ?? {}
-      try {
-        switch (cmd.action) {
-          case 'open': {
-            const target = normalizeUrl(String(params.url ?? ''))
-            if (!target) throw new Error('缺少网址')
-            await loadAndWait(view, target)
-            const pageTitle = await view.executeJavaScript('document.title')
-            await window.hq.browserResult({
-              id: cmd.id,
-              ok: true,
-              data: { url: view.getURL(), title: String(pageTitle ?? ''), tabId }
-            })
-            break
-          }
-          case 'snapshot': {
-            const data = await view.executeJavaScript(SNAPSHOT_SCRIPT)
-            await window.hq.browserResult({ id: cmd.id, ok: true, data })
-            break
-          }
-          case 'click': {
-            const index = commandIndex(params)
-            const result = await view.executeJavaScript(`(() => {
-  const el = document.querySelector('[data-hq-idx="${index}"]')
-  if (!el) return null
-  el.scrollIntoView({ block: 'center' })
-  el.click()
-  return { clicked: true, text: (el.innerText || el.value || '').trim().slice(0, 80) }
-})()`)
-            if (!result) {
-              await window.hq.browserResult({
-                id: cmd.id,
-                ok: false,
-                error: `未找到序号 ${index} 对应的元素，请先重新获取页面快照`
-              })
-            } else {
-              await window.hq.browserResult({ id: cmd.id, ok: true, data: result })
-            }
-            break
-          }
-          case 'type': {
-            const index = commandIndex(params)
-            const text = typeof params.text === 'string' ? params.text : String(params.text ?? '')
-            const submit = params.submit === true
-            const result = await view.executeJavaScript(`(() => {
-  const el = document.querySelector('[data-hq-idx="${index}"]')
-  if (!el) return null
-  el.scrollIntoView({ block: 'center' })
-  el.focus()
-  const text = ${JSON.stringify(text)}
-  const tag = el.tagName.toLowerCase()
-  if (tag === 'input' || tag === 'textarea') {
-    el.value = text
-    el.dispatchEvent(new Event('input', { bubbles: true }))
-    el.dispatchEvent(new Event('change', { bubbles: true }))
-  } else if (el.isContentEditable) {
-    el.innerText = text
-    el.dispatchEvent(new Event('input', { bubbles: true }))
-  } else {
-    return null
-  }
-  if (${submit ? 'true' : 'false'}) {
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }))
-    el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', bubbles: true }))
-    if (el.form) {
-      if (el.form.requestSubmit) el.form.requestSubmit()
-      else el.form.submit()
-    }
-  }
-  return { typed: true }
-})()`)
-            if (!result) {
-              await window.hq.browserResult({
-                id: cmd.id,
-                ok: false,
-                error: `未找到序号 ${index} 对应的输入元素`
-              })
-            } else {
-              await window.hq.browserResult({ id: cmd.id, ok: true, data: result })
-            }
-            break
-          }
-          case 'scroll': {
-            const raw = Number(params.delta ?? params.amount)
-            const delta = Number.isFinite(raw) && raw !== 0
-              ? raw
-              : params.direction === 'up'
-                ? -600
-                : 600
-            const result = await view.executeJavaScript(`(() => {
-  window.scrollBy(0, ${delta})
-  return { scrollY: window.scrollY }
-})()`)
-            await window.hq.browserResult({ id: cmd.id, ok: true, data: result })
-            break
-          }
-          case 'back': {
-            view.goBack()
-            await window.hq.browserResult({ id: cmd.id, ok: true, data: { url: view.getURL() } })
-            break
-          }
-          case 'forward': {
-            view.goForward()
-            await window.hq.browserResult({ id: cmd.id, ok: true, data: { url: view.getURL() } })
-            break
-          }
-          case 'stop': {
-            view.stop()
-            await window.hq.browserResult({ id: cmd.id, ok: true, data: { url: view.getURL() } })
-            break
-          }
-          case 'reload': {
-            view.reload()
-            await window.hq.browserResult({ id: cmd.id, ok: true, data: { url: view.getURL() } })
-            break
-          }
-          default:
-            await window.hq.browserResult({
-              id: cmd.id,
-              ok: false,
-              error: `未知的浏览器操作：${String(cmd.action)}`
-            })
-        }
-      } catch (error) {
-        await window.hq.browserResult({
-          id: cmd.id,
-          ok: false,
-          error: error instanceof Error ? error.message : String(error)
-        })
-      }
+      await executeBrowserCommand(view, cmd, {
+        tabId,
+        normalizeUrl,
+        loadAndWait: (url) => loadAndWait(view, url),
+        send: (result) => window.hq.browserResult({ ...result, id: cmd.id })
+      })
     },
     [markAgentTab, waitForView]
   )

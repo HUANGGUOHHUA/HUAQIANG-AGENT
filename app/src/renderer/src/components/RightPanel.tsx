@@ -260,6 +260,7 @@ export default function RightPanel({
     return () => window.removeEventListener('resize', onResize)
   }, [])
   const [entries, setEntries] = useState<FileEntry[]>([])
+  const [treeVersion, setTreeVersion] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [selected, setSelected] = useState<FileContent | null>(null)
@@ -276,6 +277,7 @@ export default function RightPanel({
     setLoadError('')
     try {
       setEntries(await window.hq.workspaceList('.'))
+      setTreeVersion((value) => value + 1)
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -311,7 +313,10 @@ export default function RightPanel({
     } catch (error) {
       if (requestId !== openFileRequestRef.current) return
       setSelected(null)
-      setLoadError(error instanceof Error ? error.message : String(error))
+      onNotify?.(
+        'error',
+        `无法读取 ${path}：${error instanceof Error ? error.message : String(error)}`
+      )
     } finally {
       if (requestId === openFileRequestRef.current) setPreviewLoading(false)
     }
@@ -326,10 +331,13 @@ export default function RightPanel({
 
   const saveFile = async (): Promise<void> => {
     if (!selected || saving) return
+    const path = selected.path
+    const requestId = openFileRequestRef.current
     setSaving(true)
     setSaveError('')
     try {
-      const updated = await window.hq.workspaceWrite(selected.path, draft)
+      const updated = await window.hq.workspaceWrite(path, draft)
+      if (requestId !== openFileRequestRef.current) return
       setSelected(updated)
       setEditing(false)
       void loadRoot()
@@ -355,18 +363,25 @@ export default function RightPanel({
     }
   }, [tabSignal])
 
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.()
+    }
+  }, [])
+
   const startResize = (event: React.MouseEvent): void => {
     event.preventDefault()
+    resizeCleanupRef.current?.()
     const startX = event.clientX
     const startWidth = width
     document.body.classList.add('hq-resizing')
-    const onMove = (moveEvent: MouseEvent): void => {
+    function onMove(moveEvent: MouseEvent): void {
       setWidth(clampPanelWidth(startWidth + (startX - moveEvent.clientX)))
     }
-    const onUp = (upEvent: MouseEvent): void => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      document.body.classList.remove('hq-resizing')
+    function onUp(upEvent: MouseEvent): void {
+      cleanup()
       const finalWidth = clampPanelWidth(startWidth + (startX - upEvent.clientX))
       setWidth(finalWidth)
       try {
@@ -375,6 +390,13 @@ export default function RightPanel({
         // Ignore.
       }
     }
+    function cleanup(): void {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.classList.remove('hq-resizing')
+      resizeCleanupRef.current = null
+    }
+    resizeCleanupRef.current = cleanup
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
@@ -565,7 +587,14 @@ export default function RightPanel({
               </div>
             ) : /\.(md|markdown)$/i.test(selected.path) ? (
               <div className="preview-markdown-wrap">
-                <Markdown content={selected.content} className="preview-markdown" />
+                <Markdown
+                  content={
+                    selected.content.length > 200_000
+                      ? `${selected.content.slice(0, 200_000)}\n\n…（预览已截断，完整内容请用编辑器打开）`
+                      : selected.content
+                  }
+                  className="preview-markdown"
+                />
                 <div className="preview-foot">{formatBytes(selected.size)} · Markdown 预览</div>
               </div>
             ) : selected.binary ? (
@@ -695,7 +724,12 @@ export default function RightPanel({
                 <div className="panel-empty">工作区还是空的。让 Agent 在这里创建第一个文件吧。</div>
               ) : (
                 entries.map((entry) => (
-                  <TreeNode key={entry.path} entry={entry} depth={0} onOpenFile={(path) => void openFile(path)} />
+                  <TreeNode
+                    key={`${treeVersion}:${entry.path}`}
+                    entry={entry}
+                    depth={0}
+                    onOpenFile={(path) => void openFile(path)}
+                  />
                 ))
               )}
             </div>

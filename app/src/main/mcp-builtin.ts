@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
 import { readdir, stat } from 'node:fs/promises'
-import { basename, resolve, sep } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { toolTempEnv } from './child-env'
+import { resolveWithinRoot } from './security/paths'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -19,12 +20,14 @@ interface BuiltinMcpOptions {
   workspace: () => string
   pythonPath: () => string
   version: string
+  networkLocked?: () => boolean
 }
 
-interface BuiltinCallResult {
-  content: Array<{ type: 'text'; text: string }>
-  isError?: boolean
-}
+const PYTHON_NETWORK_RE =
+  /(?:\bimport\s+(?:socket|requests|urllib|http|httpx|aiohttp|ftplib|smtplib|websocket)\b|\bfrom\s+(?:socket|requests|urllib|http|httpx|aiohttp|ftplib|smtplib|websocket)\b|https?:\/\/)/i
+
+const PYTHON_ABSOLUTE_WRITE_RE =
+  /(?:open\s*\(\s*['"](?:[A-Za-z]:[\\/]|\\\\|\/)[^'"]*['"]\s*,\s*['"][wax])|(?:(?:os\.(?:remove|unlink|rename|mkdir|makedirs)|shutil\.(?:rmtree|move|copy|copy2))\s*\(\s*['"](?:[A-Za-z]:[\\/]|\\\\|\/))/i
 
 function result(text: string, isError = false): CallToolResult {
   return {
@@ -128,6 +131,16 @@ const TOOL_DEFINITIONS = [
   {
     name: 'extract_pdf',
     description: 'Extract text from a PDF in the workspace with pdfplumber.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string' } },
+      required: ['path'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'inspect_image',
+    description: 'Inspect an image file in the workspace and return its format, mode and pixel size.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string' } },
@@ -250,17 +263,10 @@ async function searchDuckDuckGo(query: string): Promise<SearchResultItem[]> {
   return items
 }
 
-function safeWorkspacePath(root: string, input: unknown): string {
+async function safeWorkspacePath(root: string, input: unknown): Promise<string> {
   const relativePath = typeof input === 'string' ? input.trim() : ''
   if (!relativePath) throw new Error('path 不能为空')
-  const base = resolve(root)
-  const target = resolve(base, relativePath)
-  const baseLower = base.toLowerCase()
-  const targetLower = target.toLowerCase()
-  if (targetLower !== baseLower && !targetLower.startsWith(baseLower + sep)) {
-    throw new Error('路径必须位于工作区内')
-  }
-  return target
+  return resolveWithinRoot(root, relativePath)
 }
 
 function pythonSource(payload: unknown, body: string): string {
@@ -364,6 +370,12 @@ export class BuiltinMcpService {
         if (name === 'python_run') {
           const code = typeof args.code === 'string' ? args.code : ''
           if (!code.trim()) return result('code 不能为空', true)
+          if (this.options.networkLocked?.() && PYTHON_NETWORK_RE.test(code)) {
+            return result('断网锁已开启：Python 代码不能访问网络。', true)
+          }
+          if (PYTHON_ABSOLUTE_WRITE_RE.test(code)) {
+            return result('python_run 只允许写入工作区相对路径，不能直接写绝对路径。', true)
+          }
           const timeout = Number(args.timeoutMs) || 120_000
           const output = await runPython(python, root, code, Math.min(timeout, 300_000))
           return result(
@@ -379,7 +391,7 @@ export class BuiltinMcpService {
         }
 
         if (name === 'create_excel') {
-          const path = safeWorkspacePath(root, args.path)
+          const path = await safeWorkspacePath(root, args.path)
           const sheets = Array.isArray(args.sheets) ? args.sheets : []
           const code = pythonSource({ path, sheets }, [
             'import openpyxl',
@@ -396,7 +408,7 @@ export class BuiltinMcpService {
         }
 
         if (name === 'create_word') {
-          const path = safeWorkspacePath(root, args.path)
+          const path = await safeWorkspacePath(root, args.path)
           const title = typeof args.title === 'string' ? args.title : ''
           const paragraphs = Array.isArray(args.paragraphs) ? args.paragraphs : []
           const code = pythonSource({ path, title, paragraphs }, [
@@ -411,7 +423,7 @@ export class BuiltinMcpService {
         }
 
         if (name === 'create_ppt') {
-          const path = safeWorkspacePath(root, args.path)
+          const path = await safeWorkspacePath(root, args.path)
           const title = typeof args.title === 'string' ? args.title : ''
           const slides = Array.isArray(args.slides) ? args.slides : []
           const code = pythonSource({ path, title, slides }, [
@@ -435,7 +447,7 @@ export class BuiltinMcpService {
         }
 
         if (name === 'create_pdf') {
-          const path = safeWorkspacePath(root, args.path)
+          const path = await safeWorkspacePath(root, args.path)
           const title = typeof args.title === 'string' ? args.title : ''
           const paragraphs = Array.isArray(args.paragraphs) ? args.paragraphs : []
           const code = pythonSource({ path, title, paragraphs }, [
@@ -457,21 +469,30 @@ export class BuiltinMcpService {
         }
 
         if (name === 'extract_pdf') {
-          const path = safeWorkspacePath(root, args.path)
+          const path = await safeWorkspacePath(root, args.path)
+          const info = await stat(path).catch(() => null)
+          if (!info?.isFile()) return result('PDF 文件不存在', true)
+          if (info.size > 20 * 1024 * 1024) return result('PDF 超过 20MB 限制', true)
           const code = pythonSource({ path }, [
             'import pdfplumber',
             'with pdfplumber.open(payload["path"]) as pdf:',
-            '    text = "\\n\\n".join((page.extract_text() or "") for page in pdf.pages)',
+            '    pages = pdf.pages[:200]',
+            '    text = "\\n\\n".join((page.extract_text() or "") for page in pages)',
             'print(text[:300000])'
           ].join('\n'))
           return this.runGenerated(python, root, code)
         }
 
         if (name === 'inspect_image') {
-          const path = safeWorkspacePath(root, args.path)
+          const path = await safeWorkspacePath(root, args.path)
+          const info = await stat(path).catch(() => null)
+          if (!info?.isFile()) return result('图片文件不存在', true)
+          if (info.size > 20 * 1024 * 1024) return result('图片超过 20MB 限制', true)
           const code = pythonSource({ path }, [
             'from PIL import Image',
             'with Image.open(payload["path"]) as image:',
+            '    if image.width * image.height > 40000000:',
+            '        raise ValueError("图片尺寸过大")',
             '    print({"format": image.format, "mode": image.mode, "size": list(image.size)})'
           ].join('\n'))
           return this.runGenerated(python, root, code)

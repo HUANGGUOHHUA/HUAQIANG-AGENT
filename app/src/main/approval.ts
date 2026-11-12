@@ -17,7 +17,9 @@ export class ApprovalService {
     sessionId: string,
     sender: WebContents
   ): Promise<ApprovalDecision> {
-    if (this.allowlists.get(sessionId)?.has(request.toolName)) return 'always'
+    if (request.sticky !== false && this.allowlists.get(sessionId)?.has(request.toolName)) {
+      return 'always'
+    }
     if (sender.isDestroyed()) return 'deny'
     return new Promise<ApprovalDecision>((resolve) => {
       this.pending.set(request.id, { request, sessionId, sender, resolve })
@@ -33,7 +35,7 @@ export class ApprovalService {
     const pending = this.pending.get(id)
     if (!pending) return
     this.pending.delete(id)
-    if (decision === 'always') {
+    if (decision === 'always' && pending.request.sticky !== false) {
       const set = this.allowlists.get(pending.sessionId) ?? new Set<string>()
       set.add(pending.request.toolName)
       this.allowlists.set(pending.sessionId, set)

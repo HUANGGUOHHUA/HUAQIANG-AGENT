@@ -38,4 +38,9 @@ describe('PDF text extraction', () => {
   it('rejects non-PDF buffers', () => {
     expect(() => extractPdfText(Buffer.from('not a pdf'))).toThrow('PDF')
   })
+
+  it('does not expand a decompression bomb beyond the limit', () => {
+    const bomb = deflateSync(Buffer.alloc(6 * 1024 * 1024, 0x41))
+    expect(() => extractPdfText(pdfWithStream(bomb))).not.toThrow()
+  })
 })

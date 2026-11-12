@@ -189,6 +189,7 @@ export interface UiSettings {
   agentElevated: boolean
   approvalMode: ApprovalMode
   maxSteps: number
+  networkLocked: boolean
   mcpServers: McpServerConfig[]
   systemPromptExtra: string
   encryptionAvailable: boolean
@@ -202,6 +203,7 @@ export interface SettingsSaveInput {
   agentElevated?: boolean
   approvalMode: ApprovalMode
   maxSteps: number
+  networkLocked?: boolean
   mcpServers: McpServerConfig[]
   systemPromptExtra: string
   apiKeys?: Record<string, string | null>
@@ -265,6 +267,8 @@ export interface ApprovalRequest {
   risk: ToolRisk
   summary: string
   preview: string
+  /** false when this approval must be repeated each time (desktop takeover, danger re-check). */
+  sticky?: boolean
 }
 
 export type ApprovalDecision = 'deny' | 'allow' | 'always'
@@ -272,8 +276,12 @@ export type ApprovalDecision = 'deny' | 'allow' | 'always'
 export type BrowserAction =
   | 'open'
   | 'snapshot'
+  | 'screenshot'
+  | 'document-title'
   | 'click'
   | 'type'
+  | 'fill'
+  | 'autofill'
   | 'scroll'
   | 'back'
   | 'forward'

@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { dataDir } from './data-dir'
 import type {
@@ -23,11 +23,14 @@ interface StoredSettings {
   agentElevated: boolean
   approvalMode: 'ask' | 'auto'
   maxSteps: number
+  networkLocked: boolean
   mcpServers: McpServerConfig[]
   systemPromptExtra: string
 }
 
-const DEFAULT_API_KEY = "sk-134567890sv"
+// Placeholder credential for the built-in intranet gateway. Deployments can
+// replace it without rebuilding by setting HQ_DEFAULT_API_KEY.
+const DEFAULT_API_KEY = (process.env.HQ_DEFAULT_API_KEY || 'sk-134567890sv').trim()
 
 const DEFAULT_PROFILE: StoredProfile = {
   id: 'custom',
@@ -90,6 +93,7 @@ function defaults(): StoredSettings {
     agentElevated: false,
     approvalMode: 'ask',
     maxSteps: 0,
+    networkLocked: false,
     mcpServers: [],
     systemPromptExtra: ''
   }
@@ -122,6 +126,7 @@ function cleanString(value: unknown, max = 4000): string {
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (value === null || value === undefined || value === '') return fallback
   const n = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(n)) return fallback
   return Math.min(max, Math.max(min, n))
@@ -231,21 +236,40 @@ export class SettingsStore {
           agentElevated: raw.agentElevated === true,
           approvalMode: raw.approvalMode === 'auto' ? 'auto' : 'ask',
           maxSteps: Math.max(0, Math.round(clampNumber(raw.maxSteps, 0, Number.MAX_SAFE_INTEGER, 0))),
+          networkLocked: raw.networkLocked === true,
           mcpServers: cleanMcpServers(raw.mcpServers),
           systemPromptExtra: cleanString(raw.systemPromptExtra, 20000)
         }
       }
     } catch (error) {
       console.error('Failed to load settings, using defaults:', error)
+      try {
+        // Keep the broken file instead of letting the constructor overwrite it
+        // with defaults, so the user can still recover profiles and keys.
+        if (existsSync(this.file)) {
+          renameSync(this.file, `${this.file}.broken-${Date.now()}`)
+        }
+      } catch (backupError) {
+        console.error('Failed to back up broken settings:', backupError)
+      }
     }
     return defaults()
   }
 
   private persist(): void {
     mkdirSync(dirname(this.file), { recursive: true })
-    const temp = `${this.file}.tmp`
+    const temp = join(dirname(this.file), `.settings-${process.pid}-${Date.now()}.tmp`)
     writeFileSync(temp, JSON.stringify(this.data, null, 2), 'utf8')
-    renameSync(temp, this.file)
+    try {
+      renameSync(temp, this.file)
+    } catch (error) {
+      try {
+        unlinkSync(temp)
+      } catch {
+        // Ignore cleanup failures.
+      }
+      throw error
+    }
   }
 
   private toPublic(): UiSettings {
@@ -269,6 +293,7 @@ export class SettingsStore {
       agentElevated: this.data.agentElevated,
       approvalMode: this.data.approvalMode,
       maxSteps: this.data.maxSteps,
+      networkLocked: this.data.networkLocked,
       mcpServers: this.data.mcpServers,
       systemPromptExtra: this.data.systemPromptExtra,
       encryptionAvailable: safeStorage.isEncryptionAvailable()
@@ -387,6 +412,7 @@ export class SettingsStore {
       agentElevated: input.agentElevated === true,
       approvalMode: input.approvalMode === 'auto' ? 'auto' : 'ask',
       maxSteps: Math.max(0, Math.round(clampNumber(input.maxSteps, 0, Number.MAX_SAFE_INTEGER, 0))),
+      networkLocked: input.networkLocked === true,
       mcpServers: cleanMcpServers(input.mcpServers),
       systemPromptExtra: cleanString(input.systemPromptExtra, 20000)
     }

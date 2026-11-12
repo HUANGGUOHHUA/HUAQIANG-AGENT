@@ -1,9 +1,11 @@
 import crypto from 'node:crypto'
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, ipcMain, type WebContents } from 'electron'
 import type { BrowserAction, BrowserCommandResult } from '../shared/types'
 
 const COMMAND_TIMEOUT_MS = 30_000
-const MAX_DATA_CHARS = 50_000
+// Screenshots for the optional vision path can be several megabytes as data
+// URLs; text snapshots remain small. Cap at 8M characters to avoid unbounded IPC.
+const MAX_DATA_CHARS = 8_000_000
 
 interface PendingCommand {
   resolve: (data: unknown) => void
@@ -16,7 +18,10 @@ export class BrowserBridge {
   private readonly prefix: 'browser' | 'app'
   private registered = false
 
-  constructor(prefix: 'browser' | 'app' = 'browser') {
+  constructor(
+    prefix: 'browser' | 'app' = 'browser',
+    private readonly isTrusted?: (sender: WebContents) => boolean
+  ) {
     this.prefix = prefix
   }
 
@@ -27,7 +32,8 @@ export class BrowserBridge {
   registerIpc(): void {
     if (this.registered) return
     this.registered = true
-    ipcMain.handle(`${this.prefix}:result`, (_event, result: BrowserCommandResult) => {
+    ipcMain.handle(`${this.prefix}:result`, (event, result: BrowserCommandResult) => {
+      if (this.isTrusted && !this.isTrusted(event.sender)) return
       if (!result || typeof result !== 'object' || typeof result.id !== 'string') return
       const entry = this.pending.get(result.id)
       if (!entry) return

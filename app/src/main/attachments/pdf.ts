@@ -87,21 +87,26 @@ function streamTexts(buffer: Buffer): string[] {
   const texts: string[] = []
   const pattern = /stream\r?\n([\s\S]*?)\r?\nendstream/g
   let match: RegExpExecArray | null
+  let total = 0
   while ((match = pattern.exec(raw))) {
-    if (texts.join('').length > MAX_TEXT) break
+    if (total > MAX_TEXT) break
     const chunk = Buffer.from(match[1], 'latin1')
     let decoded = ''
+    const options = { maxOutputLength: 5 * 1024 * 1024 }
     try {
-      decoded = inflateSync(chunk).toString('latin1')
+      decoded = inflateSync(chunk, options).toString('latin1')
     } catch {
       try {
-        decoded = inflateRawSync(chunk).toString('latin1')
+        decoded = inflateRawSync(chunk, options).toString('latin1')
       } catch {
         decoded = match[1]
       }
     }
     const text = textFromContent(decoded)
-    if (text.trim()) texts.push(text)
+    if (text.trim()) {
+      texts.push(text)
+      total += text.length
+    }
   }
   return texts
 }

@@ -39,7 +39,10 @@ export async function* readSse(
     }
     const { done, value } = result
     if (done) break
-    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+    buffer += decoder.decode(value, { stream: true })
+    // SSE allows CR, LF and CRLF line endings. Normalizing the whole buffer
+    // (instead of each chunk) handles a CRLF split across two chunks.
+    buffer = buffer.replace(/\r\n?/g, '\n')
     let index = buffer.indexOf('\n\n')
     while (index >= 0) {
       const block = buffer.slice(0, index)

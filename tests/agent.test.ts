@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -220,6 +221,7 @@ describe('agent loop with an OpenAI-compatible mock', () => {
     const workspace = await makeWorkspace()
     let calls = 0
     let secondRequestHasImage = true
+    let secondRequestHasOcr = false
     const server = createServer((request, response) => {
       const chunks: Buffer[] = []
       request.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -232,6 +234,7 @@ describe('agent loop with an OpenAI-compatible mock', () => {
           return
         }
         secondRequestHasImage = body.includes('"image_url"')
+        secondRequestHasOcr = body.includes('图中文字ABC')
         response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8' })
         response.end(finalSse('已降级为文件引用。'))
       })
@@ -262,7 +265,8 @@ describe('agent loop with an OpenAI-compatible mock', () => {
           path: 'shot.png',
           kind: 'image',
           mime: 'image/png',
-          dataUrl: 'data:image/png;base64,AAAA'
+          dataUrl: 'data:image/png;base64,AAAA',
+          ocrText: '图中文字ABC'
         }
       ],
       tools: [],
@@ -273,6 +277,7 @@ describe('agent loop with an OpenAI-compatible mock', () => {
     expect(result.ok).toBe(true)
     expect(calls).toBe(2)
     expect(secondRequestHasImage).toBe(false)
+    expect(secondRequestHasOcr).toBe(true)
     expect(events.some((event) => event.type === 'notice')).toBe(true)
     const starts = events.filter((event) => event.type === 'assistant-start').length
     const ends = events.filter((event) => event.type === 'assistant-end').length
@@ -327,6 +332,92 @@ describe('agent loop with an OpenAI-compatible mock', () => {
     const ends = events.filter((event) => event.type === 'assistant-end').length
     expect(starts).toBeGreaterThan(0)
     expect(ends).toBe(starts)
+  })
+
+  it('falls back to reasoning when the model returns no content', async () => {
+    const workspace = await makeWorkspace()
+    const mock = await startMock(
+      () =>
+        sse({ choices: [{ delta: { reasoning_content: '这是推理给出的结论' } }] }) +
+        sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }) +
+        'data: [DONE]\n\n'
+    )
+    const events: AgentEvent[] = []
+    const result = await runAgent({
+      runId: 'run-reasoning-only',
+      sessionId: 'session-reasoning-only',
+      workspace,
+      provider: {
+        provider: 'openai',
+        baseUrl: mock.url,
+        model: 'mock-model',
+        apiKey: 'test-key',
+        temperature: 0,
+        maxTokens: 512
+      },
+      approvalMode: 'auto',
+      maxSteps: 2,
+      systemPrompt: 'test',
+      messages: [
+        { id: 'reasoning-only-user', role: 'user', content: '直接回答', createdAt: Date.now() }
+      ],
+      tools: [],
+      signal: new AbortController().signal,
+      emit: (event) => events.push(event),
+      requestApproval: async () => 'allow'
+    })
+    expect(result.ok).toBe(true)
+    const end = events.find((event) => event.type === 'assistant-end')
+    expect(end && end.type === 'assistant-end' ? end.message.content : '').toBe(
+      '这是推理给出的结论'
+    )
+  })
+
+  it('asks the model to act when it only returns action-oriented reasoning', async () => {
+    const workspace = await makeWorkspace()
+    let calls = 0
+    const mock = await startMock((_body, index) => {
+      calls = index + 1
+      if (index === 0) {
+        return (
+          sse({
+            choices: [
+              { delta: { reasoning_content: '我需要先确认 QQ 窗口是否打开，再点击发送按钮。' } }
+            ]
+          }) +
+          sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }) +
+          'data: [DONE]\n\n'
+        )
+      }
+      return finalSse('已完成')
+    })
+    const events: AgentEvent[] = []
+    const result = await runAgent({
+      runId: 'run-reasoning-retry',
+      sessionId: 'session-reasoning-retry',
+      workspace,
+      provider: {
+        provider: 'openai',
+        baseUrl: mock.url,
+        model: 'mock-model',
+        apiKey: 'test-key',
+        temperature: 0,
+        maxTokens: 512
+      },
+      approvalMode: 'auto',
+      maxSteps: 3,
+      systemPrompt: 'test',
+      messages: [userMessage],
+      tools: [],
+      signal: new AbortController().signal,
+      emit: (event) => events.push(event),
+      requestApproval: async () => 'allow'
+    })
+    expect(result.ok).toBe(true)
+    expect(calls).toBe(2)
+    expect(
+      events.some((event) => event.type === 'notice' && event.message.includes('只思考'))
+    ).toBe(true)
   })
 
   it('forwards reasoning effort to the OpenAI-compatible request', async () => {
@@ -523,6 +614,64 @@ describe('agent loop with an OpenAI-compatible mock', () => {
     expect(toolEnd && toolEnd.type === 'tool-end' ? toolEnd.stats?.additions : 0).toBe(806)
   })
 
+  it('asks for approval before deleting even in auto mode', async () => {
+    const workspace = await makeWorkspace()
+    await writeFile(join(workspace, 'remove-me.txt'), 'x', 'utf8')
+    const mock = await startMock((_body, index) =>
+      index === 0
+        ? sse({
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_del',
+                      type: 'function',
+                      function: {
+                        name: 'delete_path',
+                        arguments: JSON.stringify({ path: 'remove-me.txt' })
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }) +
+          sse({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }) +
+          'data: [DONE]\n\n'
+        : finalSse('已取消删除。')
+    )
+    const requests: ApprovalRequest[] = []
+    const result = await runAgent({
+      runId: 'run-auto-delete',
+      sessionId: 'session-auto-delete',
+      workspace,
+      provider: {
+        provider: 'openai',
+        baseUrl: mock.url,
+        model: 'mock-model',
+        apiKey: '',
+        temperature: 0,
+        maxTokens: 512
+      },
+      approvalMode: 'auto',
+      maxSteps: 3,
+      systemPrompt: 'test',
+      messages: [userMessage],
+      tools: createFileTools(),
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      requestApproval: async (request) => {
+        requests.push(request)
+        return 'deny'
+      }
+    })
+    expect(requests.map((request) => request.toolName)).toContain('delete_path')
+    expect(result.ok).toBe(true)
+    expect(existsSync(join(workspace, 'remove-me.txt'))).toBe(true)
+  })
+
   it('does not write when the user denies approval', async () => {
     const workspace = await makeWorkspace()
     const mock = await startMock((_body, index) =>
@@ -591,6 +740,28 @@ describe('workspace safety and shell', () => {
     )
   })
 
+  it('rejects dangling symlinks that point outside the workspace', async () => {
+    const workspace = await makeWorkspace()
+    try {
+      await symlink(join(workspace, 'missing-target'), join(workspace, 'escape-link'))
+    } catch {
+      return
+    }
+    await expect(resolveWithinRoot(workspace, 'escape-link/secret.txt')).rejects.toThrow()
+  })
+
+  it('rejects regex patterns that can backtrack catastrophically', async () => {
+    const workspace = await makeWorkspace()
+    const controller = new AbortController()
+    const search = createFileTools().find((tool) => tool.name === 'search_files')!
+    await expect(
+      search.execute(
+        { query: '(a+)+$', glob: '**/*' },
+        { workspace, signal: controller.signal, onOutput: () => undefined }
+      )
+    ).rejects.toThrow('灾难性回溯')
+  })
+
   it('refuses to edit files larger than the 2MB read limit', async () => {
     const workspace = await makeWorkspace()
     await writeFile(join(workspace, 'big.txt'), `marker\n${'x'.repeat(2 * 1024 * 1024)}\ntail`, 'utf8')
@@ -613,5 +784,60 @@ describe('workspace safety and shell', () => {
     )
     expect(result.isError).toBeFalsy()
     expect(result.output).toContain('华强职校')
+  })
+})
+
+describe('repeat guard', () => {
+  it('refuses a third identical tool call instead of looping', async () => {
+    const workspace = await makeWorkspace()
+    const listSse =
+      sse({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_same',
+                  type: 'function',
+                  function: { name: 'list_files', arguments: '{"path":"."}' }
+                }
+              ]
+            }
+          }
+        ]
+      }) +
+      sse({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }) +
+      'data: [DONE]\n\n'
+    const mock = await startMock((_body, index) => (index < 4 ? listSse : finalSse('已停止重复操作。')))
+    const events: AgentEvent[] = []
+    const result = await runAgent({
+      runId: 'run-repeat',
+      sessionId: 'session-repeat',
+      workspace,
+      provider: {
+        provider: 'openai',
+        baseUrl: mock.url,
+        model: 'mock-model',
+        apiKey: 'test-key',
+        temperature: 0.2,
+        maxTokens: 1024
+      },
+      approvalMode: 'auto',
+      maxSteps: 6,
+      systemPrompt: '你是测试助手',
+      messages: [userMessage],
+      tools: createFileTools(),
+      signal: new AbortController().signal,
+      emit: (event) => events.push(event),
+      requestApproval: async () => 'allow'
+    })
+
+    const toolEnds = events.filter((event) => event.type === 'tool-end')
+    const rejected = toolEnds.filter(
+      (event) => event.type === 'tool-end' && String(event.result).includes('同一操作已经执行')
+    )
+    expect(result.ok).toBe(true)
+    expect(rejected.length).toBeGreaterThan(0)
   })
 })
