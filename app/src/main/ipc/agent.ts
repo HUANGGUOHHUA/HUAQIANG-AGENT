@@ -48,7 +48,21 @@ let overlaySteps: string[] = []
 function toolDetail(args: unknown): string {
   if (!args || typeof args !== 'object') return ''
   const record = args as Record<string, unknown>
-  for (const key of ['target', 'path', 'text', 'command', 'query', 'keys', 'url', 'name']) {
+  for (const key of [
+    'target',
+    'title',
+    'process',
+    'path',
+    'text',
+    'command',
+    'question',
+    'instruction',
+    'query',
+    'keys',
+    'url',
+    'name',
+    'scope'
+  ]) {
     const value = record[key]
     if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 60)
   }

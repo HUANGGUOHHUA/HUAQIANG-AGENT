@@ -88,7 +88,32 @@ export function createDesktopTools(
         // 只有“前台窗口范围”才需要额外查询前台窗口；显式区域或整屏都不需要。
         const shot = await session.capture(false, scope === 'window' && !region)
         try {
-          const boxes = await session.ocr(shot.path, { useRapid, region })
+          const bounded = region
+            ? {
+                x: Math.max(shot.bounds.x, region.x),
+                y: Math.max(shot.bounds.y, region.y),
+                width: Math.max(
+                  1,
+                  Math.min(region.x + region.width, shot.bounds.x + shot.bounds.width) -
+                    Math.max(shot.bounds.x, region.x)
+                ),
+                height: Math.max(
+                  1,
+                  Math.min(region.y + region.height, shot.bounds.y + shot.bounds.height) -
+                    Math.max(shot.bounds.y, region.y)
+                )
+              }
+            : undefined
+          // region 是虚拟桌面坐标，RapidOCR 裁剪的是截图坐标，必须先减去截图原点。
+          const imageRegion = bounded
+            ? {
+                x: bounded.x - shot.bounds.x,
+                y: bounded.y - shot.bounds.y,
+                width: bounded.width,
+                height: bounded.height
+              }
+            : undefined
+          const boxes = await session.ocr(shot.path, { useRapid, region: imageRegion })
           const originX = shot.bounds.x + (boxes.region?.x ?? 0)
           const originY = shot.bounds.y + (boxes.region?.y ?? 0)
           const range = `虚拟桌面：x=${shot.bounds.x} y=${shot.bounds.y} ${shot.bounds.width}x${shot.bounds.height}`
@@ -108,10 +133,14 @@ export function createDesktopTools(
             scopeNote = `识别范围：前台窗口「${foreground.title}」x=${foreground.x} y=${foreground.y} ${foreground.width}x${foreground.height}`
             if (inside.length) {
               lines = inside
-            } else if (found.length) {
-              scopeNote += '（窗口内没识别到文字，已返回全屏结果）'
+            } else {
+              lines = []
+              scopeNote += '（窗口内没识别到文字；scope="window" 不返回其他窗口内容）'
             }
-          } else if (scope === 'screen' || region) {
+          } else if (region) {
+            const area = bounded ?? region
+            scopeNote = `识别范围：指定区域 x=${area.x} y=${area.y} ${area.width}x${area.height}（坐标是虚拟桌面绝对坐标；点击请用 screen_click 或 screen_click_target，不要按视觉缩放图坐标手动 mouse_click）`
+          } else if (scope === 'screen') {
             scopeNote =
               '识别范围：整个虚拟桌面（坐标是虚拟桌面绝对坐标；点击请用 screen_click 或 screen_click_target，不要按视觉缩放图坐标手动 mouse_click）'
           }
@@ -474,7 +503,7 @@ export function createDesktopTools(
       displayName: '命令行唤出窗口',
       risk: 'exec',
       description:
-        '用命令行按进程名恢复/启动窗口：枚举该进程所有顶层窗口（包括隐藏/托盘窗口）并 ShowWindow + 置前；找不到窗口时可用进程路径或开始菜单重新启动。QQ、微信等常驻托盘程序优先用它，比点托盘图标/悬浮小窗可靠。',
+        '用命令行按进程名恢复/启动窗口：枚举该进程所有顶层窗口（包括隐藏/托盘窗口），自动选择面积最大的可见主窗口并 ShowWindow + 置前；找不到窗口时可用进程路径或开始菜单重新启动。QQ、微信等常驻托盘程序优先用它，比点托盘图标/悬浮小窗可靠。',
       inputSchema: {
         type: 'object',
         properties: {

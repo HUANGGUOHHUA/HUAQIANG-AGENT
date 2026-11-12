@@ -42,7 +42,74 @@ function virtualBounds(): { x: number; y: number; width: number; height: number 
   return { x: left, y: top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) }
 }
 
-function overlayHtml(): string {
+interface OverlayScreen {
+  left: number
+  top: number
+  width: number
+  height: number
+  label: string
+}
+
+function overlayLayout(): {
+  bounds: { x: number; y: number; width: number; height: number }
+  screens: OverlayScreen[]
+} {
+  const bounds = virtualBounds()
+  let primaryId: number | undefined
+  try {
+    primaryId = screen.getPrimaryDisplay().id
+  } catch {
+    primaryId = undefined
+  }
+  const screens = screen.getAllDisplays().map((display, index) => ({
+    left: display.bounds.x - bounds.x,
+    top: display.bounds.y - bounds.y,
+    width: Math.max(1, display.bounds.width),
+    height: Math.max(1, display.bounds.height),
+    label:
+      (display.label && display.label.trim()) ||
+      (display.id === primaryId ? '主屏' : `屏幕 ${index + 1}`)
+  }))
+  return { bounds, screens }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case '&':
+        return '&amp;'
+      case '<':
+        return '&lt;'
+      case '>':
+        return '&gt;'
+      case '"':
+        return '&quot;'
+      default:
+        return '&#39;'
+    }
+  })
+}
+
+function overlayHtml(screens: OverlayScreen[]): string {
+  const screenLayers = screens
+    .map((item) => {
+      const frameWidth = Math.max(1, item.width - 12)
+      const frameHeight = Math.max(1, item.height - 12)
+      const hubWidth = Math.max(220, Math.min(420, item.width - 32))
+      return `
+  <div class="screen-frame" style="left:${item.left + 6}px;top:${item.top + 6}px;width:${frameWidth}px;height:${frameHeight}px"></div>
+  <div class="hub" style="left:${item.left + 16}px;top:${item.top + 16}px;width:${hubWidth}px">
+    <div class="hub-head">
+      <span class="dot"></span>
+      <span class="hub-title">正在控制</span>
+      <span class="hub-screen">${escapeHtml(item.label)}</span>
+      <span class="hint">退出</span>
+      <span class="key">ESC</span>
+    </div>
+    <div class="hub-status">正在等待模型…</div>
+  </div>`
+    })
+    .join('\n')
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -50,33 +117,36 @@ function overlayHtml(): string {
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
-  .frame {
-    position: fixed; inset: 6px; border-radius: 18px;
-    border: 3px solid rgba(56, 189, 248, .95);
-    box-shadow: 0 0 0 1px rgba(14, 165, 233, .45), 0 0 28px rgba(56, 189, 248, .75), inset 0 0 34px rgba(56, 189, 248, .18);
+  .screen-frame {
+    position: fixed; border-radius: 16px;
+    border: 2px solid rgba(56, 189, 248, .95);
+    box-shadow: 0 0 0 1px rgba(14, 165, 233, .45), 0 0 22px rgba(56, 189, 248, .65), inset 0 0 24px rgba(56, 189, 248, .14);
     animation: breathe 2.2s ease-in-out infinite;
+    pointer-events: none;
   }
-  .banner {
-    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
-    display: flex; flex-direction: column; align-items: stretch; gap: 5px;
-    padding: 10px 16px; border-radius: 14px;
-    color: #e0f2fe; background: rgba(8, 47, 73, .9);
-    border: 1px solid rgba(125, 211, 252, .65);
-    box-shadow: 0 8px 28px rgba(2, 132, 199, .35);
-    font: 600 13px/1.2 "Microsoft YaHei", "Segoe UI", sans-serif;
+  .hub {
+    position: fixed; z-index: 6;
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 9px 12px; border-radius: 12px;
+    color: #e0f2fe; background: rgba(8, 47, 73, .84);
+    border: 1px solid rgba(125, 211, 252, .55);
+    box-shadow: 0 6px 20px rgba(2, 132, 199, .3);
+    font: 600 12px/1.25 "Microsoft YaHei", "Segoe UI", sans-serif;
     letter-spacing: .02em; white-space: normal;
-    width: min(760px, calc(100vw - 40px));
+    pointer-events: none;
   }
-  .banner-head { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
-  .status {
-    font-weight: 400; font-size: 12px; line-height: 1.45;
+  .hub-head { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .hub-title { font-weight: 600; }
+  .hub-screen { font-weight: 400; font-size: 11px; color: #7dd3fc; }
+  .hub-status {
+    font-weight: 400; font-size: 11px; line-height: 1.4;
     color: rgba(224, 242, 254, .92);
-    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden; word-break: break-word; white-space: pre-line;
   }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 10px #38bdf8; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 10px #38bdf8; flex: none; }
   .key { padding: 2px 7px; border-radius: 5px; border: 1px solid rgba(186, 230, 253, .55); font-size: 11px; color: #bae6fd; }
-  .hint { font-weight: 400; color: rgba(224, 242, 254, .72); font-size: 12px; }
+  .hint { font-weight: 400; color: rgba(224, 242, 254, .72); font-size: 11px; }
   .target {
     position: fixed; display: none; z-index: 8; pointer-events: none;
     border: 2px solid #fbbf24; border-radius: 7px;
@@ -96,20 +166,11 @@ function overlayHtml(): string {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     box-shadow: 0 4px 14px rgba(120, 53, 15, .3);
   }
-  @keyframes breathe { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+  @keyframes breathe { 0%, 100% { opacity: .62; } 50% { opacity: 1; } }
 </style>
 </head>
 <body>
-  <div class="frame"></div>
-  <div class="banner">
-    <div class="banner-head">
-      <span class="dot"></span>
-      <span>华强以太正在控制 · 鼠标已锁定</span>
-      <span class="hint">退出请按</span>
-      <span class="key">ESC</span>
-    </div>
-    <div class="status" id="status">正在等待模型…</div>
-  </div>
+${screenLayers}
   <div class="target" id="target"></div>
   <div class="target-label" id="targetLabel"></div>
   <script>
@@ -140,9 +201,10 @@ function overlayHtml(): string {
           label.style.display = 'none'
         }, 1100)
       }
-      const status = document.getElementById('status')
+      const statuses = Array.from(document.querySelectorAll('.hub-status'))
       window.__hqStatus = (text) => {
-        if (status) status.textContent = text || '正在等待模型…'
+        const value = text || '正在等待模型…'
+        for (const node of statuses) node.textContent = value
       }
       window.__hqClearHighlight = () => {
         clearTimeout(hideTimer)
@@ -196,10 +258,13 @@ export function showControlOverlay(): void {
   released = false
   pendingStatus = '正在等待模型…'
   startInputLock(process.pid)
+  const layout = overlayLayout()
   const win = ensureOverlay()
-  win.setBounds(virtualBounds())
+  win.setBounds(layout.bounds)
   win.webContents.once('did-finish-load', () => flushStatus())
-  void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml())}`)
+  void win.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml(layout.screens))}`
+  )
   win.showInactive()
 }
 

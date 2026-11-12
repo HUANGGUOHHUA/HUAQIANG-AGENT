@@ -583,14 +583,32 @@ public static class HqRestore
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
     [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr h, bool altTab);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool GetWindowPlacement(IntPtr h, ref WINDOWPLACEMENT placement);
     [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr h);
     [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WINDOWPLACEMENT
+    {
+        public int length;
+        public int flags;
+        public int showCmd;
+        public POINT ptMinPosition;
+        public POINT ptMaxPosition;
+        public RECT rcNormalPosition;
+    }
 
     public static IntPtr[] FindWindows(int[] pids)
     {
@@ -642,31 +660,62 @@ if ($handles.Length -eq 0 -and $Launch) {
     }
 }
 if ($handles.Length -eq 0) { Write-Output 'notfound'; exit 0 }
-$best = [IntPtr]::Zero
+$matching = @()
+$all = @()
+$filter = if ($Title) { $Title } else { $ProcessName }
 foreach ($h in $handles) {
     $text = [HqRestore]::TextOf($h)
-    if ($Title -and $text -and $text.IndexOf($Title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $best = $h; break }
-    if (-not $Title -and $text) { $best = $h; break }
-    if ($best -eq [IntPtr]::Zero -and $text) { $best = $h }
+    $all += $h
+    if ($text -and $text.IndexOf($filter, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        $matching += $h
+    }
 }
-if ($best -eq [IntPtr]::Zero) {
-    foreach ($h in $handles) {
+if ($matching.Count -eq 0) {
+    if ($Title) { Write-Output 'notfound'; exit 0 }
+    $matching = $all
+}
+$candidates = @()
+foreach ($h in $matching) {
+    $placement = New-Object HqRestore+WINDOWPLACEMENT
+    $placement.length = [System.Runtime.InteropServices.Marshal]::SizeOf([type][HqRestore+WINDOWPLACEMENT])
+    $w = 0
+    $hgt = 0
+    if ([HqRestore]::GetWindowPlacement($h, [ref]$placement)) {
+        $normal = $placement.rcNormalPosition
+        $w = $normal.Right - $normal.Left
+        $hgt = $normal.Bottom - $normal.Top
+    }
+    if ($w -le 0 -or $hgt -le 0) {
         $probe = New-Object HqRestore+RECT
-        if ([HqRestore]::GetWindowRect($h, [ref]$probe) -and ($probe.Right - $probe.Left) -gt 0) { $best = $h; break }
+        if ([HqRestore]::GetWindowRect($h, [ref]$probe)) {
+            $w = $probe.Right - $probe.Left
+            $hgt = $probe.Bottom - $probe.Top
+        }
+    }
+    if ($w -le 0 -or $hgt -le 0) { continue }
+    $candidates += [PSCustomObject]@{
+        Handle = $h
+        Area = $w * $hgt
+        Visible = [HqRestore]::IsWindowVisible($h)
+        Title = [HqRestore]::TextOf($h)
     }
 }
-if ($best -eq [IntPtr]::Zero) { $best = $handles[0] }
-foreach ($h in $handles) {
-    if ([HqRestore]::TextOf($h) -or $h -eq $best) {
-        [void][HqRestore]::ShowWindow($h, 9)
-        [void][HqRestore]::ShowWindow($h, 5)
-    }
-}
+if ($candidates.Count -eq 0) { Write-Output 'notfound'; exit 0 }
+$best = ($candidates | Sort-Object -Property Area, Visible -Descending | Select-Object -First 1).Handle
+# 只恢复选中的主窗口，避免把 QQ 的其他聊天/托盘窗口一起弹出来。
+[void][HqRestore]::ShowWindow($best, 9)
+[void][HqRestore]::ShowWindow($best, 5)
+# 顶层窗口置前两次（TOPMOST -> NOTOPMOST）可绕过部分前台锁定。
+[void][HqRestore]::SetWindowPos($best, [IntPtr](-1), 0, 0, 0, 0, 0x0003)
+[void][HqRestore]::SetWindowPos($best, [IntPtr](-2), 0, 0, 0, 0, 0x0003)
 [void][HqRestore]::BringWindowToTop($best)
 [void][HqRestore]::SetForegroundWindow($best)
 Start-Sleep -Milliseconds 500
-[void][HqRestore]::SwitchToThisWindow($best, $true)
-Start-Sleep -Milliseconds 500
+if ([HqRestore]::GetForegroundWindow() -ne $best) {
+    [void][HqRestore]::ShowWindow($best, 9)
+    [HqRestore]::SwitchToThisWindow($best, $true)
+    Start-Sleep -Milliseconds 400
+}
 $windowTitle = [HqRestore]::TextOf($best)
 if (-not $windowTitle) { $windowTitle = $ProcessName }
 $rect = New-Object HqRestore+RECT

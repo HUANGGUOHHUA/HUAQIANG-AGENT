@@ -251,7 +251,7 @@ function releaseHiddenWindow(): void {
   win.setOpacity(state.previousOpacity)
   win.setIgnoreMouseEvents(false)
   win.setContentProtection(false)
-  if (state.wasVisible) win.showInactive()
+
 }
 
 function restoreHiddenWindow(): void {

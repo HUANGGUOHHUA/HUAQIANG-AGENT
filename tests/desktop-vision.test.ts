@@ -1,6 +1,7 @@
 import { unlink } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
 import { DesktopSession } from '../app/src/main/agent/tools/desktop/session'
+import { WINDOW_RESTORE_SCRIPT } from '../app/src/main/agent/tools/desktop/scripts'
 
 vi.mock('electron', () => ({
   desktopCapturer: { getSources: async () => [] },
@@ -116,7 +117,6 @@ describe('desktop vision', () => {
       expect(calls).toContainEqual(['protect', true])
       expect(calls).toContainEqual(['opacity', 0])
       expect(calls).toContainEqual(['ignore', true])
-      expect(calls).toContainEqual(['showInactive', true])
     } finally {
       shot.restore()
       await unlink(shot.path).catch(() => undefined)
@@ -124,6 +124,7 @@ describe('desktop vision', () => {
     expect(calls).toContainEqual(['opacity', 1])
     expect(calls).toContainEqual(['ignore', false])
     expect(calls).toContainEqual(['protect', false])
+    expect(calls).not.toContainEqual(['showInactive', true])
   }, 45_000)
 
   it('keeps the window transparent until the outermost takeover ends', async () => {
@@ -164,6 +165,13 @@ describe('desktop vision', () => {
     const session = new DesktopSession(() => null, {})
     await expect(session.restoreWindow('NoSuchProcessZZZ', '', false, 0)).resolves.toBeNull()
   }, 45_000)
+
+  it('declares every Win32 method used by the restore script', () => {
+    expect(WINDOW_RESTORE_SCRIPT).toContain('public static extern IntPtr GetForegroundWindow();')
+    expect(WINDOW_RESTORE_SCRIPT).toContain('[HqRestore]::GetForegroundWindow()')
+    expect(WINDOW_RESTORE_SCRIPT).toContain('GetWindowPlacement')
+    expect(WINDOW_RESTORE_SCRIPT).toContain('[HqRestore]::ShowWindow($best, 9)')
+  })
 
   it('scales large screenshots down to the visual edge limit', async () => {
     const session = new DesktopSession(() => null, {})

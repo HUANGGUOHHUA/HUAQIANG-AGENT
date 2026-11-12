@@ -39,7 +39,7 @@ export async function runPowerShell(
   timeout = 20_000
 ): Promise<string> {
   const script = join(tmpdir(), `huaqiang-${name}-${randomUUID()}.ps1`)
-  await writeFile(script, content, 'utf8')
+  await writeFile(script, '\uFEFF' + content, 'utf8')
   try {
     const { stdout } = await run(
       'powershell.exe',
