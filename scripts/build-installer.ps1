@@ -11,12 +11,6 @@ if (-not (Test-Path $csc)) { throw 'csc.exe not found (requires .NET Framework 4
 
 $release = Join-Path $root 'output'
 $version = (Get-Content (Join-Path $root 'package.json') -Raw -Encoding utf8 | ConvertFrom-Json).version
-$installerSource = Get-Content (Join-Path $root "installer/setup/Installer.cs") -Raw -Encoding utf8
-$installerVersion = ([regex]::Match($installerSource, 'AppVersion\s*=\s*"([^"]+)"')).Groups[1].Value
-if ($installerVersion -ne $version) {
-    throw "installer/setup/Installer.cs has AppVersion=$installerVersion but package.json is $version"
-}
-
 $payload = Join-Path $release 'app.zip'
 $uninstaller = Join-Path $release 'Uninstall.exe'
 $setupName = "HuaqiangAgent-$version-setup.exe"

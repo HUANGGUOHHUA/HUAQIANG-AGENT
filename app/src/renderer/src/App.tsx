@@ -56,17 +56,6 @@ import SettingsModal from './components/SettingsModal'
 import ApprovalModal from './components/ApprovalModal'
 import emblem from './assets/emblem.png'
 
-type Theme = 'dark' | 'light'
-const THEME_KEY = 'hq.theme.v2'
-
-function initialTheme(): Theme {
-  try {
-    return localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'
-  } catch {
-    return 'light'
-  }
-}
-
 function createSession(workspace?: string): ChatSession {
   const now = Date.now()
   return {
@@ -101,7 +90,6 @@ function Toast({
 
 export default function App(): React.JSX.Element {
   const initialSession = useRef<ChatSession>(createSession()).current
-  const [theme, setTheme] = useState<Theme>(initialTheme)
   const [settings, setSettings] = useState<UiSettings | null>(null)
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [session, setSession] = useState<ChatSession>(initialSession)
@@ -147,19 +135,6 @@ export default function App(): React.JSX.Element {
   const sessionLoadSeqRef = useRef(0)
   const sessionSelectChainRef = useRef<Promise<void>>(Promise.resolve())
   const mcpRefreshTimersRef = useRef<number[]>([])
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    try {
-      localStorage.setItem(THEME_KEY, theme)
-    } catch {
-      // Local storage may be unavailable in restricted environments.
-    }
-  }, [theme])
-
-  const toggleTheme = useCallback(() => {
-    setTheme((value) => (value === 'light' ? 'dark' : 'light'))
-  }, [])
 
   const showToast = useCallback((type: ToastMessage['type'], message: string): void => {
     const id = uid()
@@ -1335,8 +1310,6 @@ export default function App(): React.JSX.Element {
             settings={settings}
             running={running}
             rightOpen={rightOpen}
-            theme={theme}
-            onToggleTheme={toggleTheme}
             onToggleRight={() => setRightOpen((value) => !value)}
             onOpenSettings={() => openSettings('model')}
             onChooseWorkspace={() => void chooseWorkspace()}

@@ -1,4 +1,4 @@
-import { FolderOpen, Moon, PanelRightClose, PanelRightOpen, Settings2, Sun } from 'lucide-react'
+import { FolderOpen, PanelRightClose, PanelRightOpen, Settings2 } from 'lucide-react'
 import type { UiSettings } from '../../../shared/types'
 import { cn, shortPath } from '../lib/utils'
 
@@ -7,8 +7,6 @@ interface ChatHeaderProps {
   settings: UiSettings
   running: boolean
   rightOpen: boolean
-  theme: 'dark' | 'light'
-  onToggleTheme: () => void
   onToggleRight: () => void
   onOpenSettings: () => void
   onChooseWorkspace: () => void
@@ -19,8 +17,6 @@ export default function ChatHeader({
   settings,
   running,
   rightOpen,
-  theme,
-  onToggleTheme,
   onToggleRight,
   onOpenSettings,
   onChooseWorkspace
@@ -60,15 +56,6 @@ export default function ChatHeader({
           aria-label="切换右侧栏"
         >
           {rightOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={onToggleTheme}
-          title={theme === 'light' ? '切换到深色主题' : '切换到白色主题'}
-          aria-label={theme === 'light' ? '切换到深色主题' : '切换到白色主题'}
-        >
-          {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
         </button>
         <button
           type="button"
