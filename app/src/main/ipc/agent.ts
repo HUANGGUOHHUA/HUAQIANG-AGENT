@@ -23,6 +23,7 @@ import { revealTool } from '../agent/tools/reveal'
 import { systemInfoTool, webFetchTool } from '../agent/tools/system'
 import type { ToolDefinition } from '../agent/tools/types'
 import { prepareAttachmentsForModel } from '../agent/vision'
+import { isEscapeStopSuppressed } from '../escape-stop'
 import {
   hideControlOverlay,
   highlightControl,
@@ -328,6 +329,7 @@ function registerEscapeStop(): boolean {
   if (globalShortcut.isRegistered('Escape')) return false
   try {
     return globalShortcut.register('Escape', () => {
+      if (isEscapeStopSuppressed()) return
       hideControlOverlay()
       for (const [id, run] of activeRuns) {
         run.controller.abort()

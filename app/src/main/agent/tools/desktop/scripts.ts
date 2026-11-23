@@ -758,3 +758,31 @@ try {
 } finally { $img.Dispose() }
 Write-Output "$outWidth,$outHeight,$scale"
 `
+export const QQ_OPEN_CHAT_SCRIPT = String.raw`param(
+  [string]$Url
+)
+$ErrorActionPreference = 'Stop'
+Start-Process -FilePath $Url
+Write-Output 'ok'
+`
+
+export const FOREGROUND_WINDOW_SCRIPT = String.raw`Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class HqForeground {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+}
+"@
+$handle = [HqForeground]::GetForegroundWindow()
+$title = New-Object System.Text.StringBuilder 512
+[void][HqForeground]::GetWindowText($handle, $title, 512)
+$procId = 0
+[void][HqForeground]::GetWindowThreadProcessId($handle, [ref]$procId)
+$process = Get-Process -Id $procId -ErrorAction SilentlyContinue
+$name = ''
+if ($process) { $name = $process.ProcessName }
+Write-Output ($name + '|' + $title.ToString())
+`

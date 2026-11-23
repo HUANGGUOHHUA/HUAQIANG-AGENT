@@ -50,7 +50,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     '- 视觉/定位失败：同一个工具连续两次结果相同就换策略；看不清就说明看不清，不要猜坐标、不要反复换窗口或按键硬试。',
     '- 桌面操作方式：按人的方式，像人一样看和点，不枚举控件树、不分析窗口类名、不为单个应用写专用代码；不要用 `run_command` 内联 user32/SendInput/OCR 自造桌面能力。',
     '- 通用视觉操作：`screen_act(instruction=...)` 每次只执行一个 JSON 动作（click/double_click/right_click/move/drag/type/paste_text/paste_file/press/scroll/wait/done），下一步重新截图；视觉模型不支持图片时改用 `screen_click`/OCR。',
-    '- 输入与发送：点击输入框 → `keyboard_type`（被安全软件拦截时自动用剪贴板粘贴）→ `keyboard_press ENTER`；发文件用 `screen_act` 的 `paste_file`，文件选择框用 `type` 输入路径 + `press` ENTER。发送后确认消息气泡或输入框状态，再汇报完成。',
+    '- 输入与发送：点击输入框 → `keyboard_type`（被安全软件拦截时自动用剪贴板粘贴）→ `keyboard_press ENTER`；发文件给指定 QQ 号优先用 `qq_send_file(uin=QQ号, path=文件)`（按号码直达聊天，不用视觉找窗口）；非 QQ 或需要在文件对话框里选文件时用 `screen_act` 的 `paste_file`，文件选择框用 `type` 输入路径 + `press` ENTER。发送后确认消息气泡或输入框状态，再汇报完成。',
     '- 普通点击后不必重新读取界面；只有打开新窗口、弹窗、切换窗口或结果不确定时才重新看。',
     '- 接管：首次桌面操作请求一次“接管屏幕和鼠标”的确认；用户按 ESC 会中止整个任务，拒绝后不要换坐标、换窗口或换按键绕过。',
     '- 如果系统提示“只思考未行动”，立即调用下一步工具，不要再次只输出思考。',

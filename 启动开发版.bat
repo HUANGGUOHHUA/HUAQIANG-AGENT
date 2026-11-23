@@ -1,9 +1,29 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Huaqiang Agent Dev
 
 if /i "%~1"=="--check" (
+  echo launcher-check-ok
+  exit /b 0
+)
+if /i "%~1"=="--console" goto :console
+if /i "%~1"=="--hidden" goto :run
+
+start "" /b wscript.exe "%~dp0dev-hidden.vbs" %*
+exit /b 0
+
+:console
+shift
+
+:run
+title Huaqiang Agent Dev
+
+set "HQ_HIDDEN="
+set "HQ_CHECK="
+if /i "%~1"=="--hidden" set "HQ_HIDDEN=1"
+if /i "%~1"=="--check" set "HQ_CHECK=1"
+if /i "%~2"=="--check" set "HQ_CHECK=1"
+if defined HQ_CHECK (
   echo launcher-check-ok
   exit /b 0
 )
@@ -32,14 +52,14 @@ if not errorlevel 1 (
 where node >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Node.js was not found in PATH.
-  pause
+  if not defined HQ_HIDDEN pause
   exit /b 1
 )
 
 where npm >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] npm was not found in PATH.
-  pause
+  if not defined HQ_HIDDEN pause
   exit /b 1
 )
 
@@ -49,7 +69,7 @@ if not exist "node_modules\electron\dist\electron.exe" (
   if errorlevel 1 (
     echo.
     echo [ERROR] npm install failed. See the output above.
-    pause
+    if not defined HQ_HIDDEN pause
     exit /b 1
   )
 )
@@ -63,6 +83,6 @@ set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
   echo.
   echo [EXIT] Dev server stopped with code %EXIT_CODE%.
-  pause
+  if not defined HQ_HIDDEN pause
 )
 exit /b %EXIT_CODE%

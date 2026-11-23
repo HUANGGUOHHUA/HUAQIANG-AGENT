@@ -137,15 +137,26 @@ export async function relaunchElevated(): Promise<boolean> {
   const quote = (value: string): string => `'${value.replace(/'/g, "''")}'`
   const projectRoot = app.getAppPath()
   const devLauncher = join(projectRoot, '启动开发版.bat')
+  const devHidden = join(projectRoot, 'dev-hidden.vbs')
   let command: string
-  if (!app.isPackaged && existsSync(devLauncher)) {
+  if (!app.isPackaged && existsSync(devHidden)) {
+    // Launch the hidden VBS directly: no intermediate cmd window, and the dev
+    // server keeps running without a console under the elevated context.
+    command = [
+      'try {',
+      `Start-Process -FilePath 'wscript.exe' -ArgumentList @(${quote(devHidden)})`,
+      `-WorkingDirectory ${quote(projectRoot)}`,
+      '-Verb RunAs -WindowStyle Hidden -ErrorAction Stop',
+      '} catch { exit 1 }'
+    ].join(' ')
+  } else if (!app.isPackaged && existsSync(devLauncher)) {
     // Restarting electron.exe alone would leave the electron-vite dev server
     // behind, so the new window loads nothing. Elevate the project launcher.
     command = [
       'try {',
       `Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c',${quote(`"${devLauncher}"`)})`,
       `-WorkingDirectory ${quote(projectRoot)}`,
-      '-Verb RunAs -ErrorAction Stop',
+      '-Verb RunAs -WindowStyle Hidden -ErrorAction Stop',
       '} catch { exit 1 }'
     ].join(' ')
   } else {
