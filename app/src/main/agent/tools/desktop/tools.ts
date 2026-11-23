@@ -1,12 +1,9 @@
-import { statSync, type Stats } from 'node:fs'
 import { readFile, stat, unlink } from 'node:fs/promises'
-import { basename, isAbsolute, resolve } from 'node:path'
 import type { BrowserWindow } from 'electron'
 import { resolveWithinRoot } from '../../../security/paths'
-import { boolArg, formatBytes, numberArg, stringArg, ToolError, truncate } from '../types'
+import { boolArg, numberArg, stringArg, ToolError, truncate } from '../types'
 import type { ToolDefinition } from '../types'
-import { POST_MOUSE_DELAY_MS, runPowerShell, waitFor } from './powershell'
-import { FOREGROUND_WINDOW_SCRIPT, QQ_OPEN_CHAT_SCRIPT } from './scripts'
+import { POST_MOUSE_DELAY_MS, waitFor } from './powershell'
 import {
   DesktopSession,
   linesInWindow,
@@ -14,7 +11,6 @@ import {
   type DesktopToolOptions,
   type VisionCrop
 } from './session'
-import { withEscapeStopSuppressed } from '../../../escape-stop'
 import { buildVisualPrompt, parseVisualAction, type ScreenBounds } from './visual'
 
 /** 桌面控制工具：全部通过 DesktopSession 执行，坐标均为虚拟桌面物理像素。 */
@@ -313,11 +309,7 @@ export function createDesktopTools(
             }
           }
           if (action.action === 'press') {
-            await withEscapeStopSuppressed(async () => {
-              await session.pressKeys(action.keys)
-              // Let the global ESC shortcut see and ignore the synthetic key.
-              await new Promise((resolve) => setTimeout(resolve, 150))
-            })
+            await session.pressKeys(action.keys)
             return { output: `视觉操作按键 ${action.keys}` }
           }
           if (action.action === 'scroll') {
@@ -544,83 +536,6 @@ export function createDesktopTools(
       }
     },
     {
-      name: 'qq_send_file',
-      displayName: 'QQ 发送文件',
-      risk: 'network',
-      confirmInAuto: true,
-      description:
-        '把本地文件发送给指定 QQ 号：用 tencent:// 协议打开与该号码的聊天窗口，确认 QQ 在前台后把文件放进剪贴板并粘贴，默认回车发送。不需要机器人、OpenID，也不用视觉找窗口；依赖本机 QQ 已登录且聊天窗口能切到前台。发送前会请求用户确认。文件路径支持绝对路径或相对工作区。',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          uin: { type: 'string', description: '对方 QQ 号，5-12 位数字' },
-          path: { type: 'string', description: '要发送的文件路径，绝对路径或相对工作区' },
-          send: { type: 'boolean', description: '粘贴后是否自动回车发送，默认 true；false 只放入输入框' },
-          wait_ms: { type: 'number', description: '打开聊天窗口后的等待毫秒，默认 4000，范围 500-15000' }
-        },
-        required: ['uin', 'path'],
-        additionalProperties: false
-      },
-      summarize: (args) => {
-        const raw = stringArg(args, 'path')
-        return `QQ 发送「${raw ? basename(raw) : '?'}」给 ${stringArg(args, 'uin') || '?'}`
-      },
-      execute: async (args, context) => {
-        const uin = stringArg(args, 'uin', { required: true, max: 20 }).trim()
-        if (!/^\d{5,12}$/.test(uin)) throw new ToolError('uin 必须是 5-12 位数字 QQ 号')
-        const rawPath = stringArg(args, 'path', { required: true, max: 4096 }).trim()
-        if (!rawPath) throw new ToolError('path 不能为空')
-        const target = isAbsolute(rawPath) ? resolve(rawPath) : resolve(context.workspace, rawPath)
-        let info: Stats
-        try {
-          info = statSync(target)
-        } catch {
-          throw new ToolError(`无法读取文件：${target}`)
-        }
-        if (!info.isFile()) throw new ToolError('path 必须指向文件，不能是目录')
-        if (info.size <= 0) throw new ToolError('文件是空的，未发送')
-        if (info.size > 2 * 1024 * 1024 * 1024) {
-          throw new ToolError(`文件过大（${formatBytes(info.size)}），QQ 可能无法发送`)
-        }
-
-        const send = boolArg(args, 'send', true)
-        const waitMs = numberArg(args, 'wait_ms', 4000, 500, 15_000)
-
-        if (context.signal.aborted) throw new ToolError('操作已中止')
-        await runPowerShell(
-          'qq-open-chat',
-          QQ_OPEN_CHAT_SCRIPT,
-          ['-Url', `tencent://message/?uin=${uin}&Site=&Menu=yes`],
-          15_000
-        )
-        await waitFor(waitMs, context.signal)
-
-        const foreground = await runPowerShell('qq-foreground', FOREGROUND_WINDOW_SCRIPT, [], 10_000)
-        const bar = foreground.indexOf('|')
-        const proc = (bar >= 0 ? foreground.slice(0, bar) : foreground).trim()
-        const title = bar >= 0 ? foreground.slice(bar + 1).trim() : ''
-        if (!/^(qq|tim|timwp)$/i.test(proc)) {
-          throw new ToolError(
-            `聊天窗口没有切到前台（当前前台：${proc || '未知'}「${title}」）。请确认 QQ 已登录，并手动打开与 ${uin} 的聊天窗口后重试。`
-          )
-        }
-
-        if (context.signal.aborted) throw new ToolError('操作已中止')
-        await session.pasteFiles([target])
-        await waitFor(900, context.signal)
-        if (send) {
-          if (context.signal.aborted) throw new ToolError('操作已中止')
-          await session.pressKeys('ENTER')
-          await waitFor(600, context.signal)
-        }
-        return {
-          output: send
-            ? `已在 QQ 与 ${uin} 的聊天窗口粘贴并回车发送「${basename(target)}」（${formatBytes(info.size)}）`
-            : `已把「${basename(target)}」放入与 ${uin} 的聊天输入框，尚未发送`
-        }
-      }
-    },
-    {
       name: 'mouse_move',
       displayName: '移动鼠标',
       risk: 'exec',
@@ -786,11 +701,7 @@ export function createDesktopTools(
       execute: async (args) => {
         const keys = stringArg(args, 'keys', { required: true, max: 200 }).trim()
         if (!keys) throw new ToolError('keys 不能为空')
-        await withEscapeStopSuppressed(async () => {
-          await session.pressKeys(keys)
-          // Let the global ESC shortcut see and ignore the synthetic key.
-          await new Promise((resolve) => setTimeout(resolve, 150))
-        })
+        await session.pressKeys(keys)
         return { output: `已按键 ${keys}` }
       }
     }

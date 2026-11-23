@@ -2,7 +2,6 @@ import { Component, StrictMode, type ErrorInfo, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import './styles.css'
-import './theme-light.css'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null }
@@ -27,13 +26,6 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
       </div>
     )
   }
-}
-
-try {
-  document.documentElement.dataset.theme =
-    localStorage.getItem('hq.theme.v2') === 'dark' ? 'dark' : 'light'
-} catch {
-  document.documentElement.dataset.theme = 'light'
 }
 
 createRoot(document.getElementById('root')!).render(
