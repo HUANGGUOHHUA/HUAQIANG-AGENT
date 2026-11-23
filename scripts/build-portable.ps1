@@ -9,6 +9,13 @@ Set-Location $root
 
 $package = Get-Content (Join-Path $root "package.json") -Raw -Encoding utf8 | ConvertFrom-Json
 $version = $package.version
+# Launcher.cs is compiled on its own; its AppVersion must match package.json.
+$launcherSource = Get-Content (Join-Path $root "installer/launcher/Launcher.cs") -Raw -Encoding utf8
+$launcherVersion = ([regex]::Match($launcherSource, 'AppVersion\s*=\s*"([^"]+)"')).Groups[1].Value
+if ($launcherVersion -ne $version) {
+  throw "installer/launcher/Launcher.cs has AppVersion=$launcherVersion but package.json is $version"
+}
+
 $release = Join-Path $root "output"
 $dist = Join-Path $release "win-unpacked"
 $appZip = Join-Path $release "app.zip"

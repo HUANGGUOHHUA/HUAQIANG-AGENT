@@ -77,7 +77,13 @@ describe('desktop vision', () => {
     const gated = new Set<string>(DESKTOP_TOOL_NAMES)
     const tools = createDesktopTools(() => null, {})
     expect(tools.length).toBeGreaterThan(0)
-    expect(tools.map((tool) => tool.name).filter((name) => !gated.has(name))).toEqual([])
+    // qq_send_file does not take over the screen; it asks approval per send instead.
+    expect(tools.map((tool) => tool.name).filter((name) => !gated.has(name))).toEqual([
+      'qq_send_file'
+    ])
+    const qqSend = tools.find((tool) => tool.name === 'qq_send_file')!
+    expect(qqSend.confirmInAuto).toBe(true)
+    expect(qqSend.risk).toBe('network')
   })
 
   it('only exposes human-shaped desktop tools', () => {
