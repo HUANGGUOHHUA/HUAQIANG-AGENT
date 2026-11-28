@@ -89,13 +89,19 @@ function loadAndWait(view: HqWebviewElement, url: string): Promise<void> {
 function normalizeUrl(raw: string): string {
   const value = raw.trim()
   if (!value) return ''
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value) ? value : `https://${value}`
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) {
+    return /^https?:\/\//i.test(value) ? value : ''
+  }
+  return `https://${value}`
 }
 
 function resolveTarget(raw: string): string {
   const value = raw.trim()
   if (!value) return ''
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return value
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) {
+    if (/^https?:\/\//i.test(value)) return value
+    return `https://www.baidu.com/s?wd=${encodeURIComponent(value)}`
+  }
   // 形如 example.com / example.com/path 的按网址处理，其余当关键词搜索
   if (/^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]\S*)?$/.test(value)) return `https://${value}`
   return `https://www.baidu.com/s?wd=${encodeURIComponent(value)}`
@@ -146,10 +152,7 @@ function BrowserTabView({
     const onTitle = (event: Event): void => {
       onUpdate(tabId, { title: (event as { title?: string }).title ?? '' })
     }
-    const onNewWindow = (event: Event): void => {
-      const target = (event as { url?: string }).url
-      if (target) void window.hq.openExternal(target).catch(() => undefined)
-    }
+
     const onFoundInPage = (event: Event): void => {
       const detail = event as { result?: { activeMatchOrdinal?: number; matches?: number } }
       if (detail.result) {
@@ -165,7 +168,7 @@ function BrowserTabView({
     view.addEventListener('did-start-loading', onStart)
     view.addEventListener('did-stop-loading', onStop)
     view.addEventListener('page-title-updated', onTitle)
-    view.addEventListener('new-window', onNewWindow)
+
     view.addEventListener('found-in-page', onFoundInPage)
     return () => {
       view.removeEventListener('dom-ready', onReadyEvent)
@@ -174,7 +177,7 @@ function BrowserTabView({
       view.removeEventListener('did-start-loading', onStart)
       view.removeEventListener('did-stop-loading', onStop)
       view.removeEventListener('page-title-updated', onTitle)
-      view.removeEventListener('new-window', onNewWindow)
+
       view.removeEventListener('found-in-page', onFoundInPage)
     }
   }, [tabId, onUpdate, onReady, onFound])

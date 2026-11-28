@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { join } from 'node:path'
+import { isWindows } from './platform'
 import type { ToolDefinition, ToolResult } from './agent/tools/types'
 
 const EXECUTE_TIMEOUT_MS = 15 * 60_000
@@ -40,6 +41,7 @@ export class AgentWorkerBridge {
   private pending = new Map<string, PendingCall>()
   private buffer = ''
   private workspace = ''
+  private networkLocked = false
 
   ready = false
 
@@ -54,6 +56,8 @@ export class AgentWorkerBridge {
   }
 
   async start(): Promise<boolean> {
+    // The elevated worker depends on PowerShell + UAC; other platforms run tools in-process.
+    if (!isWindows) return false
     await this.listen()
     this.log(`pipe=${this.pipeName} elevated=${this.options.elevated}`)
     try {
@@ -272,7 +276,7 @@ export class AgentWorkerBridge {
       })
       try {
         this.socket!.write(
-          `${JSON.stringify({ type: 'execute', id, tool, args, workspace: context.workspace })}\n`
+          `${JSON.stringify({ type: 'execute', id, tool, args, workspace: context.workspace, networkLocked: this.networkLocked })}\n`
         )
       } catch (error) {
         clearTimeout(timer)
@@ -293,6 +297,10 @@ export class AgentWorkerBridge {
 
   setWorkspace(workspace: string): void {
     this.workspace = workspace
+  }
+
+  setNetworkLocked(locked: boolean): void {
+    this.networkLocked = locked
   }
 
   executeBuiltin(

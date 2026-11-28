@@ -672,6 +672,101 @@ describe('agent loop with an OpenAI-compatible mock', () => {
     expect(existsSync(join(workspace, 'remove-me.txt'))).toBe(true)
   })
 
+  it('reads approval mode live so ask -> auto skips later prompts', async () => {
+    const workspace = await makeWorkspace()
+    const mock = await startMock((_body, index) =>
+      index === 0
+        ? writeCallSse('第一份', 'one.txt')
+        : index === 1
+          ? writeCallSse('第二份', 'two.txt')
+          : finalSse('完成')
+    )
+    let mode: 'ask' | 'auto' = 'ask'
+    const requests: ApprovalRequest[] = []
+    const result = await runAgent({
+      runId: 'run-live-mode',
+      sessionId: 'session-live-mode',
+      workspace,
+      provider: {
+        provider: 'openai',
+        baseUrl: mock.url,
+        model: 'mock-model',
+        apiKey: '',
+        temperature: 0,
+        maxTokens: 512
+      },
+      approvalMode: 'ask',
+      getApprovalMode: () => mode,
+      maxSteps: 4,
+      systemPrompt: 'test',
+      messages: [userMessage],
+      tools: createFileTools(),
+      signal: new AbortController().signal,
+      emit: () => undefined,
+      requestApproval: async (request) => {
+        requests.push(request)
+        mode = 'auto'
+        return 'allow'
+      }
+    })
+    expect(result.ok).toBe(true)
+    expect(requests).toHaveLength(1)
+    expect(await readFile(join(workspace, 'one.txt'), 'utf8')).toBe('第一份')
+    expect(await readFile(join(workspace, 'two.txt'), 'utf8')).toBe('第二份')
+  })
+
+  it('runs two sessions concurrently without mixing events', async () => {
+    const workspaceA = await makeWorkspace()
+    const workspaceB = await makeWorkspace()
+    const mockA = await startMock(() => finalSse('回答 A'))
+    const mockB = await startMock(() => finalSse('回答 B'))
+    const eventsA: AgentEvent[] = []
+    const eventsB: AgentEvent[] = []
+    const provider = (url: string) => ({
+      provider: 'openai' as const,
+      baseUrl: url,
+      model: 'mock-model',
+      apiKey: '',
+      temperature: 0,
+      maxTokens: 512
+    })
+    const base = {
+      approvalMode: 'auto' as const,
+      maxSteps: 3,
+      systemPrompt: 'test',
+      messages: [userMessage],
+      tools: createFileTools(),
+      signal: new AbortController().signal,
+      requestApproval: async () => 'allow' as const
+    }
+
+    const [a, b] = await Promise.all([
+      runAgent({
+        ...base,
+        runId: 'run-a',
+        sessionId: 'session-a',
+        workspace: workspaceA,
+        provider: provider(mockA.url),
+        emit: (event) => eventsA.push(event)
+      }),
+      runAgent({
+        ...base,
+        runId: 'run-b',
+        sessionId: 'session-b',
+        workspace: workspaceB,
+        provider: provider(mockB.url),
+        emit: (event) => eventsB.push(event)
+      })
+    ])
+
+    expect(a.ok).toBe(true)
+    expect(b.ok).toBe(true)
+    expect(eventsA.length).toBeGreaterThan(0)
+    expect(eventsB.length).toBeGreaterThan(0)
+    expect(eventsA.every((event) => event.runId === 'run-a')).toBe(true)
+    expect(eventsB.every((event) => event.runId === 'run-b')).toBe(true)
+  })
+
   it('does not write when the user denies approval', async () => {
     const workspace = await makeWorkspace()
     const mock = await startMock((_body, index) =>

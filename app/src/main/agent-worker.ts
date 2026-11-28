@@ -38,9 +38,11 @@ const toolMap = new Map<string, ToolDefinition>(
 )
 
 let workspace = ''
+let networkLocked = false
 const builtin = new BuiltinMcpService({
   workspace: () => workspace,
   pythonPath: () => pythonPath,
+  networkLocked: () => networkLocked,
   version: 'agent-worker'
 })
 let mcpClient: Client | null = null
@@ -92,6 +94,7 @@ interface WorkerRequest {
   tool?: string
   args?: Record<string, unknown>
   workspace?: string
+  networkLocked?: boolean
 }
 
 async function handle(message: WorkerRequest): Promise<void> {
@@ -102,6 +105,7 @@ async function handle(message: WorkerRequest): Promise<void> {
   if (message.type !== 'execute' || !message.id || !message.tool) return
   const id = message.id
   if (typeof message.workspace === 'string' && message.workspace) workspace = message.workspace
+  if (typeof message.networkLocked === 'boolean') networkLocked = message.networkLocked
   const controller = new AbortController()
   pending.set(id, controller)
   try {

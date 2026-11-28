@@ -326,6 +326,8 @@ export interface ScreenshotResult {
 export interface AgentRunRequest {
   runId: string
   sessionId: string
+  /** Workspace for this conversation; defaults to the global setting when omitted. */
+  workspace?: string
   messages: AppMessage[]
   model?: string
   contextWindow?: number
@@ -358,7 +360,7 @@ export interface CompactResult {
   error?: string
 }
 
-export type AgentEvent =
+export type AgentEvent = { sessionId?: string } & (
   | { type: 'run-start'; runId: string }
   | { type: 'notice'; runId: string; message: string }
   | { type: 'assistant-start'; runId: string; messageId: string }
@@ -399,6 +401,7 @@ export type AgentEvent =
   | { type: 'context-compressed'; runId: string; dropped: number; summaryChars: number }
   | { type: 'run-end'; runId: string; status: 'done' | 'aborted' | 'error'; error?: string; usage?: Usage; stats?: SessionStats }
   | { type: 'mcp-status'; statuses: McpStatus[] }
+  )
 
 export interface FileEntry {
   name: string

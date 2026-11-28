@@ -14,6 +14,7 @@ interface SidebarProps {
   activeSessionId: string | null
   settings: UiSettings
   running: boolean
+  runningSessionIds: string[]
   appVersion: string
   onNewChat: () => void
   onSelectSession: (id: string) => void
@@ -27,6 +28,7 @@ export default function Sidebar({
   activeSessionId,
   settings,
   running,
+  runningSessionIds,
   appVersion,
   onNewChat,
   onSelectSession,
@@ -57,6 +59,7 @@ export default function Sidebar({
       return bTime - aTime
     })
 
+  const runningSet = new Set(runningSessionIds)
   const renderSession = (session: SessionMeta): React.JSX.Element => (
     <div
       className={cn('session-item', session.id === activeSessionId && 'active')}
@@ -69,6 +72,9 @@ export default function Sidebar({
         title={session.title}
       >
         <MessageSquare size={14} strokeWidth={1.7} className="session-icon" />
+        {runningSet.has(session.id) && (
+          <span className="session-running-dot" title="正在运行" />
+        )}
         <span className="session-title">{session.title}</span>
         <span className="session-time">{formatRelative(session.updatedAt)}</span>
       </button>
@@ -97,10 +103,9 @@ export default function Sidebar({
 
       <button
         type="button"
-        className={cn('new-chat-btn', running && 'disabled')}
+        className="new-chat-btn"
         onClick={onNewChat}
-        disabled={running}
-        title={running ? '请先停止当前任务' : '新建对话'}
+        title="新建对话"
       >
         <Plus size={17} strokeWidth={2} />
         <span>新建对话</span>

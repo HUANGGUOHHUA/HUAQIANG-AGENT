@@ -41,7 +41,10 @@ export interface RunOptions {
   contextSummary?: string
   attachments?: AttachmentPayload[]
   reasoningEffort?: ReasoningEffort
-  approvalMode: 'ask' | 'auto'
+  /** Initial approval mode snapshot; prefer getApprovalMode for live reading. */
+  approvalMode?: 'ask' | 'auto'
+  /** Live approval mode; when provided it overrides approvalMode mid-run. */
+  getApprovalMode?: () => 'ask' | 'auto'
   maxSteps: number
   systemPrompt: string
   messages: AppMessage[]
@@ -49,6 +52,8 @@ export interface RunOptions {
   signal: AbortSignal
   emit: (event: AgentEvent) => void
   requestApproval: (request: ApprovalRequest) => Promise<ApprovalDecision>
+  /** Returns false when another conversation currently owns the physical desktop. */
+  acquireDesktop?: () => boolean
 }
 
 const MAX_HISTORY_MESSAGES = 80
@@ -668,12 +673,15 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
         continue
       }
 
+      // Reading the same page repeatedly is legitimate while navigating; without
+// this exemption browser_snapshot (no args) hits the repeat limit on step 4.
+      const observeOnly = definition.name === 'browser_snapshot'
       const signature = `${call.name}:${JSON.stringify(call.args ?? {})}`
-      const seen = (repeatCounts.get(signature) ?? 0) + 1
+      const seen = observeOnly ? 0 : (repeatCounts.get(signature) ?? 0) + 1
       repeatCounts.set(signature, seen)
       // 读工具（OCR/视觉）允许重复观察，因为窗口可能变化；动作工具第三次就拒绝。
       const repeatLimit = definition.risk === 'read' ? 3 : 2
-      if (seen > repeatLimit) {
+      if (!observeOnly && seen > repeatLimit) {
         // 同样的调用重复太多次就拒绝：同样的输入不会得到不同的结果。
         call.status = 'error'
         call.isError = true
@@ -694,6 +702,23 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
       }
 
       const isDesktopTool = DESKTOP_TOOLS.has(definition.name)
+      if (isDesktopTool && options.acquireDesktop && !options.acquireDesktop()) {
+        call.status = 'error'
+        call.isError = true
+        call.result =
+          '桌面自动化正被另一个会话使用。请等待它结束，或在那个会话里停止任务；不要改用视觉或命令行绕过。'
+        call.endedAt = Date.now()
+        emit({
+          type: 'tool-end',
+          runId,
+          messageId,
+          callId: call.id,
+          status: 'error',
+          result: call.result,
+          isError: true
+        })
+        continue
+      }
       if (isDesktopTool && desktopControlDenied) {        call.status = 'denied'
         call.isError = true
         call.result = '用户已拒绝屏幕接管。本次任务不再尝试桌面操作。'
@@ -715,8 +740,9 @@ export async function runAgent(options: RunOptions): Promise<AgentRunResult> {
         !isDesktopTool &&
         (definition.confirmInAuto === true ||
           definition.confirmInAutoWhen?.(call.args) === true)
+      const approvalMode = options.getApprovalMode ? options.getApprovalMode() : (options.approvalMode ?? 'ask')
       const needsNormalApproval =
-        !isDesktopTool && definition.risk !== 'read' && (options.approvalMode === 'ask' || safetyReview)
+        !isDesktopTool && definition.risk !== 'read' && (approvalMode === 'ask' || safetyReview)
       if (needsDesktopApproval || needsNormalApproval) {
         let summary = call.name
         try {

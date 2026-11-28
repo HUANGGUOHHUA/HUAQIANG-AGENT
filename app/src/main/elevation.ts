@@ -93,7 +93,11 @@ let groupsOutput: string | null = null
 function whoamiGroups(): string {
   if (groupsOutput !== null) return groupsOutput
   try {
-    groupsOutput = execFileSync('whoami', ['/groups'], {
+    // Use the absolute path: Git Bash ships a GNU whoami that rejects /groups.
+    const whoami = process.env.SystemRoot
+      ? join(process.env.SystemRoot, 'System32', 'whoami.exe')
+      : 'whoami.exe'
+    groupsOutput = execFileSync(whoami, ['/groups'], {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 3000

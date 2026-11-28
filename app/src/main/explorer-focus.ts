@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { isWindows } from './platform'
 
 // 通过 Shell.Application 找到目标路径对应的资源管理器窗口，
 // 轮询等待窗口出现后将其置为顶层（置顶）并激活。
@@ -34,6 +35,8 @@ function escapePs(text: string): string {
 
 /** 资源管理器窗口打开后将其置顶并激活。尽力而为：任何失败都不影响打开本身。 */
 export function focusExplorerWindow(target: string): void {
+  // Explorer focus is Windows-only; on Linux the file manager handles focus.
+  if (!isWindows) return
   try {
     const script = PS_SCRIPT.replace('__TARGET__', () => escapePs(target))
     const encoded = Buffer.from(script, 'utf16le').toString('base64')

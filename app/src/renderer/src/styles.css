@@ -1005,3 +1005,23 @@
 .start-panel-status .ready-divider {
   height: 9px;
 }
+.session-running-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #2f7cf6;
+  box-shadow: 0 0 0 3px rgba(47, 124, 246, 0.16);
+  animation: session-running-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes session-running-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}

@@ -5,6 +5,7 @@ import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
+import { isWindows } from '../platform'
 
 const run = promisify(execFile)
 
@@ -171,6 +172,11 @@ export interface OcrBoxes {
 }
 
 async function runOcr(path: string, json: boolean): Promise<string> {
+  if (!isWindows) {
+    throw new Error(
+      '当前平台不支持系统 OCR（Windows.Media.Ocr）。Linux 请安装 python3 + rapidocrlite 使用 RapidOCR。'
+    )
+  }
   const script = await ensureScript()
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Path', path, '-Scale', '2.0']
   if (json) args.push('-Json')

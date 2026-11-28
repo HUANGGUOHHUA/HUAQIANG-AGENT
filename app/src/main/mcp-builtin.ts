@@ -164,7 +164,7 @@ const TOOL_DEFINITIONS = [
 ]
 
 const INSTRUCTIONS = [
-  '华强以太内置 MCP 服务，提供便携 Python 与办公文档能力。',
+  '华强以太内置 MCP 服务，提供便携 Python、办公文档与联网搜索（web_search）能力。',
   '所有文件路径都必须相对于当前工作区；服务会拒绝工作区外的路径。',
   '处理 Excel/Word/PPT/PDF/图片时优先使用这里的工具，而不是临时手写 PowerShell。',
   'python_run 使用随程序携带的 Python，已安装 openpyxl、python-docx、python-pptx、pypdf、reportlab、pandas、numpy、matplotlib、Pillow、requests、beautifulsoup4、XlsxWriter、pdfplumber。',

@@ -52,6 +52,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\下载依赖.ps1 -Force
    - pypdf、pdfplumber、reportlab
    - pandas、numpy、matplotlib
    - Pillow、requests、beautifulsoup4、XlsxWriter
+   - pdfplumber、rapidocrlite（屏幕 OCR / RapidOCR 引擎，导入名为 `rapidocr`）
 
 ## 日志
 
@@ -97,6 +98,10 @@ charset = utf-8-bom
 不要用普通“UTF-8”格式覆盖 `.ps1`。
 
 ## 安装完成后
+
+推荐双击上一级目录的 `启动开发版.bat`（或 `dev-hidden.vbs`）。这样启动不会出现控制台窗口，日志写入 `logs\dev.log`；只有启动失败时才会弹窗提示日志位置。
+
+也可以在终端里运行：
 
 ```powershell
 npm.cmd run dev

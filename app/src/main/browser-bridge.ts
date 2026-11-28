@@ -69,6 +69,10 @@ export class BrowserBridge {
     const serialized = JSON.stringify(data)
     if (typeof serialized !== 'string') return undefined
     if (serialized.length <= MAX_DATA_CHARS) return data
-    return `${serialized.slice(0, MAX_DATA_CHARS)}…（内容已截断）`
+    // Never return half of a JSON string: that breaks JSON.parse and turns a
+    // screenshot data URL into an invalid image. Fail loudly instead.
+    throw new Error(
+      `${this.label}返回数据过大（${serialized.length} 字符，上限 ${MAX_DATA_CHARS}）。请缩小范围后重试。`
+    )
   }
 }

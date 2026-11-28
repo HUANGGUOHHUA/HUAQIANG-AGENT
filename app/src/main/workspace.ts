@@ -11,6 +11,7 @@ import { ocrImage } from './attachments/ocr'
 
 import { spawn } from 'node:child_process'
 import { focusExplorerWindow } from './explorer-focus'
+import { isWindows } from './platform'
 
 async function spawnDetached(command: string, args: string[]): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -29,6 +30,19 @@ async function spawnDetached(command: string, args: string[]): Promise<void> {
  *  在部分安全软件环境下，主进程直接 spawn explorer.exe 会被静默拦截，
  *  而系统自带的 powershell 作为中间层可以通过。 */
 async function launchExplorer(target: string, forceNewWindow = false): Promise<void> {
+  if (!isWindows) {
+    // Linux/macOS: use the desktop's default file manager.
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [target], {
+        stdio: 'ignore',
+        detached: true
+      })
+      child.once('spawn', () => resolve())
+      child.once('error', reject)
+      child.unref()
+    })
+    return
+  }
   try {
     await new Promise<void>((resolve, reject) => {
       const child = spawn('explorer.exe', forceNewWindow ? ['/e,', target] : [target], {

@@ -1,10 +1,26 @@
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { focusExplorerWindow } from '../../explorer-focus'
+import { isWindows } from '../../platform'
 import type { ToolDefinition } from './types'
 import { stringArg, ToolError } from './types'
 
 function launch(target: string, forceNewWindow: boolean): Promise<void> {
+  if (!isWindows) {
+    // Linux/macOS: hand the path to the desktop's default opener.
+    return new Promise<void>((resolve, reject) => {
+      const child = spawn(isMacOpen() ? 'open' : 'xdg-open', [target], {
+        stdio: 'ignore',
+        detached: true
+      })
+      child.once('error', reject)
+      child.once('exit', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`打开文件管理器失败（退出码 ${code}）`))
+      })
+      child.unref()
+    })
+  }
   // 和 Agent 执行命令的逻辑一致：cmd /c start。
   // 目录用 explorer.exe /e, 强制开新窗口，避免"窗口已存在所以看起来没反应"。
   const args = forceNewWindow
@@ -23,6 +39,10 @@ function launch(target: string, forceNewWindow: boolean): Promise<void> {
     })
     child.unref()
   })
+}
+
+function isMacOpen(): boolean {
+  return process.platform === 'darwin'
 }
 
 /** 在提权辅助进程里打开资源管理器，规避主进程被安全软件拦截的问题。 */

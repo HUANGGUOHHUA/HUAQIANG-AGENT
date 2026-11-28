@@ -26,6 +26,7 @@ export class ApprovalService {
       sender.send('agent:event', {
         type: 'approval-request',
         runId: request.runId,
+        sessionId,
         request
       })
     })
@@ -44,10 +45,31 @@ export class ApprovalService {
       pending.sender.send('agent:event', {
         type: 'approval-closed',
         runId: pending.request.runId,
+        sessionId: pending.sessionId,
         requestId: id
       })
     }
     pending.resolve(decision)
+  }
+
+  /**
+   * Resolve waiting approvals, optionally limited to one session. Switching to
+   * auto mode releases only requests that are safe to pre-approve; dangerous
+   * ones (sticky === false, e.g. desktop takeover or risky shell) still wait.
+   */
+  resolvePendingForSession(
+    sessionId: string | undefined,
+    decision: ApprovalDecision = 'allow',
+    onlyStickySafe = true
+  ): number {
+    let resolved = 0
+    for (const [id, pending] of [...this.pending]) {
+      if (sessionId && pending.sessionId !== sessionId) continue
+      if (onlyStickySafe && pending.request.sticky === false) continue
+      this.decide(id, decision)
+      resolved++
+    }
+    return resolved
   }
 
   cancelRun(runId: string): void {
@@ -58,6 +80,7 @@ export class ApprovalService {
         pending.sender.send('agent:event', {
           type: 'approval-closed',
           runId: pending.request.runId,
+          sessionId: pending.sessionId,
           requestId: id
         })
       }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, protocol } from 'electron'
+import { app, BrowserWindow, Menu, protocol, shell } from 'electron'
 import { readFile } from 'node:fs/promises'
 import { writeFileSync } from 'node:fs'
 import { join, normalize, relative } from 'node:path'
@@ -94,6 +94,19 @@ export function createWindow(): void {
     }
     webPreferences.nodeIntegration = false
     delete webPreferences.preload
+  })
+
+  // Keep the embedded browser on http(s): guest webviews can otherwise load
+  // file:// or javascript: URLs and read local files from the renderer.
+  win.webContents.on('did-attach-webview', (_event, guest) => {
+    const allowed = (url: string): boolean => url === 'about:blank' || /^https?:\/\//i.test(url)
+    guest.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+      return { action: 'deny' }
+    })
+    guest.on('will-navigate', (event, url) => {
+      if (!allowed(url)) event.preventDefault()
+    })
   })
 
   const sendWindowState = (maximized: boolean): void => {

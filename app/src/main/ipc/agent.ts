@@ -325,10 +325,15 @@ function registerCompactIpc(): void {
 }
 
 /** ESC 是任务运行期间的紧急停止；只在有任务时注册，避免抢走其他程序的 Esc。 */
+let escapeStopUsers = 0
+
 function registerEscapeStop(): boolean {
-  if (globalShortcut.isRegistered('Escape')) return false
+  if (globalShortcut.isRegistered('Escape')) {
+    escapeStopUsers += 1
+    return true
+  }
   try {
-    return globalShortcut.register('Escape', () => {
+    const registered = globalShortcut.register('Escape', () => {
       if (isEscapeStopSuppressed()) return
       hideControlOverlay()
       for (const [id, run] of activeRuns) {
@@ -336,10 +341,26 @@ function registerEscapeStop(): boolean {
         state.approval.cancelRun(id)
       }
     })
+    if (registered) escapeStopUsers += 1
+    return registered
   } catch {
     return false
   }
 }
+
+/** Release one run's hold; only unregister when no run still needs ESC. */
+function releaseEscapeStop(): void {
+  escapeStopUsers = Math.max(0, escapeStopUsers - 1)
+  if (escapeStopUsers > 0) return
+  try {
+    globalShortcut.unregister('Escape')
+  } catch {
+    // The app may be shutting down; unregister must not mask the result.
+  }
+}
+
+/** The physical desktop is a single resource; only one run may own it. */
+let desktopOwnerRunId: string | null = null
 
 function registerRunIpc(): void {
   handleTrusted(
@@ -348,9 +369,7 @@ function registerRunIpc(): void {
       if (!input || typeof input !== 'object' || !Array.isArray(input.messages)) {
         return { ok: false, error: '请求格式不正确' }
       }
-      if (activeRuns.size > 0) {
-        return { ok: false, error: '已有任务正在运行，请先停止或等待完成。' }
-      }
+      // Concurrent runs are allowed; each run is isolated by runId/sessionId.
       const runId = typeof input.runId === 'string' && input.runId ? input.runId : crypto.randomUUID()
       const sessionId = typeof input.sessionId === 'string' ? input.sessionId : 'default'
       const controller = new AbortController()
@@ -374,16 +393,13 @@ function registerRunIpc(): void {
         return result
       } finally {
         activeRuns.delete(runId)
+        if (desktopOwnerRunId === runId) desktopOwnerRunId = null
         state.approval.cancelRun(runId)
         sender.removeListener('destroyed', onDestroyed)
         hideControlOverlay()
         restoreDesktopWindow()
         if (escapeRegistered) {
-          try {
-            globalShortcut.unregister('Escape')
-          } catch {
-            // The app may be shutting down; unregister must not mask the result.
-          }
+          releaseEscapeStop()
         }
       }
     }
@@ -436,9 +452,13 @@ async function runSession({
     }
 
     const settings = state.settings.getRaw()
+    const workspace =
+      typeof input.workspace === 'string' && input.workspace.trim()
+        ? input.workspace
+        : settings.workspace
     const enabledMcp = settings.mcpServers.filter((server) => server.enabled).map((server) => server.name)
     const systemPrompt = buildSystemPrompt({
-      workspace: settings.workspace,
+      workspace,
       extra: settings.systemPromptExtra,
       model,
       mcpServerNames: enabledMcp,
@@ -447,12 +467,13 @@ async function runSession({
       approvalMode: settings.approvalMode
     })
 
-    state.worker?.setWorkspace(settings.workspace)
-    await probeWorkspace(settings.workspace, sender, runId)
+    state.worker?.setWorkspace(workspace)
+    state.worker?.setNetworkLocked(settings.networkLocked)
+    await probeWorkspace(workspace, sender, runId)
 
     let beforeSnapshot: Awaited<ReturnType<typeof snapshotWorkspace>> | null = null
     try {
-      beforeSnapshot = await snapshotWorkspace(settings.workspace)
+      beforeSnapshot = await snapshotWorkspace(workspace)
     } catch (error) {
       console.error('Failed to snapshot workspace:', error)
     }
@@ -460,7 +481,7 @@ async function runSession({
     const result = await runAgent({
       runId,
       sessionId,
-      workspace: settings.workspace,
+      workspace,
       provider: {
         provider: profile.provider,
         baseUrl: profile.baseUrl,
@@ -475,13 +496,22 @@ async function runSession({
       attachments: prepared.attachments,
       reasoningEffort: input.reasoningEffort,
       approvalMode: settings.approvalMode,
+      getApprovalMode: () => state.settings.getRaw().approvalMode,
+      acquireDesktop: () => {
+        if (desktopOwnerRunId === null || desktopOwnerRunId === runId) {
+          desktopOwnerRunId = runId
+          return true
+        }
+        return false
+      },
       maxSteps: settings.maxSteps,
       systemPrompt,
       messages: input.messages.slice(-200),
       tools: [...coreTools, ...mcpTools],
       signal: controller.signal,
       emit: (payload) => {
-        if (!sender.isDestroyed()) sender.send('agent:event', payload)
+        const event = { ...payload, sessionId }
+        if (!sender.isDestroyed()) sender.send('agent:event', event)
         updateOverlayFromEvent(payload)
         if (payload.type === 'notice' && payload.message.includes('屏幕接管已开启')) {
           showControlOverlay()
@@ -507,7 +537,7 @@ async function runSession({
 
     if (beforeSnapshot) {
       try {
-        const afterSnapshot = await snapshotWorkspace(settings.workspace)
+        const afterSnapshot = await snapshotWorkspace(workspace)
         result.workspaceChanges = diffWorkspace(beforeSnapshot, afterSnapshot)
       } catch (error) {
         console.error('Failed to diff workspace:', error)

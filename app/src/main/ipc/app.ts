@@ -30,7 +30,13 @@ export function registerAppIpc(): void {
   handleTrusted('settings:get', () => state.settings.getPublic())
 
   handleTrusted('settings:save', (_event, input: SettingsSaveInput) => {
+    const before = state.settings.getRaw().approvalMode
     const settings = state.settings.save(input)
+    if (before !== 'auto' && settings.approvalMode === 'auto') {
+      // Switching to auto mid-run: release ordinary approvals still waiting.
+      // Dangerous requests (sticky === false) keep their dialog.
+      state.approval.resolvePendingForSession(undefined, 'allow', true)
+    }
     const servers = state.settings.getRaw().mcpServers
     // Reconnecting while a run is active would close clients that in-flight
     // tool calls still hold, so defer the sync until the next run.

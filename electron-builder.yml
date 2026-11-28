@@ -45,6 +45,15 @@ extraResources:
     to: chunks
   - from: runtime/python
     to: runtime/python
+linux:
+  icon: build/icon.png
+  executableName: huaqiang-agent
+  category: Development
+  target:
+    - AppImage
+    - deb
+  artifactName: HuaqiangAgent-${version}-${arch}.${ext}
+
 win:
   icon: build/icon.ico
   executableName: HuaqiangAgent

@@ -3,6 +3,7 @@ import { readFile, stat, unlink } from 'node:fs/promises'
 import { basename, isAbsolute, resolve } from 'node:path'
 import type { BrowserWindow } from 'electron'
 import { resolveWithinRoot } from '../../../security/paths'
+import { isWindows } from '../../../platform'
 import { boolArg, formatBytes, numberArg, stringArg, ToolError, truncate } from '../types'
 import type { ToolDefinition } from '../types'
 import { POST_MOUSE_DELAY_MS, runPowerShell, waitFor } from './powershell'
@@ -22,6 +23,8 @@ export function createDesktopTools(
   getWindow: () => BrowserWindow | null,
   options: DesktopToolOptions = {}
 ): ToolDefinition[] {
+  // Desktop automation relies on Win32/PowerShell; other platforms get no tools.
+  if (!isWindows) return []
   const session = new DesktopSession(getWindow, options)
 
   const resolveVisionCrop = (

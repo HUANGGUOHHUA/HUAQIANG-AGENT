@@ -1,6 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+rem Never let an inherited ELECTRON_RUN_AS_NODE turn Electron into plain Node.
+set "ELECTRON_RUN_AS_NODE="
 
 if /i "%~1"=="--check" (
   echo launcher-check-ok

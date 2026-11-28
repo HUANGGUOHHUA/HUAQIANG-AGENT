@@ -3,9 +3,9 @@ import type { AgentEvent, ApprovalRequest, ChatSession, Usage } from '../app/src
 import { createAgentEventHandler, type AgentEventDeps } from '../app/src/renderer/src/lib/agent-events'
 import type { LiveMessage, ToastMessage } from '../app/src/renderer/src/types'
 
-function emptySession(): ChatSession {
+function emptySession(id = 'session-1'): ChatSession {
   return {
-    id: 'session-1',
+    id,
     title: '新对话',
     createdAt: 0,
     updatedAt: 0,
@@ -16,8 +16,9 @@ function emptySession(): ChatSession {
 function harness() {
   const state = {
     live: null as LiveMessage | null,
-    session: emptySession(),
-    committed: [] as ChatSession[],
+    lives: new Map<string, LiveMessage | null>(),
+    sessions: new Map<string, ChatSession>([['session-1', emptySession()]]),
+    committed: [] as Array<{ sessionId: string; session: ChatSession }>,
     persisted: [] as ChatSession[],
     toasts: [] as Array<{ type: ToastMessage['type']; message: string }>,
     approvals: [] as Array<ApprovalRequest | null>,
@@ -25,26 +26,35 @@ function harness() {
     running: true,
     runError: null as string | null,
     statuses: [] as Array<{ name: string }>,
-    flushes: 0
+    flushes: 0,
+    runIds: new Map<string, string>([['session-1', 'run-1']]),
+    lastRunIds: new Map<string, string>()
   }
   let approval: ApprovalRequest | null = null
   const deps: AgentEventDeps = {
-    runIdRef: { current: 'run-1' },
-    lastRunIdRef: { current: null },
-    getLive: () => state.live,
-    setLiveNow: (message) => {
-      state.live = message
+    getActiveSessionId: () => 'session-1',
+    getRunId: (sessionId) => state.runIds.get(sessionId) ?? null,
+    setRunId: (sessionId, runId) => {
+      if (runId) state.runIds.set(sessionId, runId)
+      else state.runIds.delete(sessionId)
     },
-    updateLive: (message) => {
-      state.live = message
+    getLastRunId: (sessionId) => state.lastRunIds.get(sessionId) ?? null,
+    getLive: (sessionId) => state.lives.get(sessionId) ?? null,
+    setLiveNow: (sessionId, message) => {
+      state.lives.set(sessionId, message)
+      if (sessionId === 'session-1') state.live = message
+    },
+    updateLive: (sessionId, message) => {
+      state.lives.set(sessionId, message)
+      if (sessionId === 'session-1') state.live = message
     },
     flushLive: () => {
       state.flushes += 1
     },
-    getSession: () => state.session,
-    commitSession: (session) => {
-      state.session = session
-      state.committed.push(session)
+    getSession: (sessionId) => state.sessions.get(sessionId) ?? emptySession(sessionId),
+    commitSession: (sessionId, session) => {
+      state.sessions.set(sessionId, session)
+      state.committed.push({ sessionId, session })
     },
     persistSession: (session) => {
       state.persisted.push(session)
@@ -52,17 +62,17 @@ function harness() {
     showToast: (type, message) => {
       state.toasts.push({ type, message })
     },
-    setApproval: (value) => {
+    setApproval: (_sessionId, value) => {
       approval = typeof value === 'function' ? value(approval) : value
       state.approvals.push(approval)
     },
-    setUsage: (usage) => {
+    setUsage: (_sessionId, usage) => {
       state.usage = usage
     },
-    setRunning: (running) => {
+    setRunning: (_sessionId, running) => {
       state.running = running
     },
-    setRunError: (message) => {
+    setRunError: (_sessionId, message) => {
       state.runError = message
     },
     setMcpStatuses: (statuses) => {
@@ -87,6 +97,22 @@ describe('agent event handler', () => {
     expect(state.committed).toHaveLength(0)
   })
 
+  it('routes events of concurrent sessions to their own session', () => {
+    const { state, emit } = harness()
+    state.runIds.set('session-2', 'run-2')
+    emit({ type: 'assistant-start', runId: 'run-2', messageId: 'm2', sessionId: 'session-2' })
+    expect(state.lives.get('session-2')).toMatchObject({ id: 'm2' })
+    expect(state.live).toBeNull()
+    emit({
+      type: 'assistant-end',
+      runId: 'run-2',
+      sessionId: 'session-2',
+      message: { id: 'm2', role: 'assistant', content: 'B', createdAt: 2 }
+    })
+    expect(state.sessions.get('session-2')?.messages.map((message) => message.id)).toEqual(['m2'])
+    expect(state.sessions.get('session-1')?.messages).toHaveLength(0)
+  })
+
   it('streams deltas then stores the finished message', () => {
     const { state, emit } = harness()
     emit({ type: 'assistant-start', runId: 'run-1', messageId: 'm1' })
@@ -99,7 +125,7 @@ describe('agent event handler', () => {
       runId: 'run-1',
       message: { id: 'm1', role: 'assistant', content: '你好', createdAt: 1 }
     })
-    expect(state.session.messages).toHaveLength(1)
+    expect(state.sessions.get('session-1')?.messages).toHaveLength(1)
     expect(state.live).toBeNull()
     expect(state.persisted).toHaveLength(1)
   })
@@ -109,7 +135,7 @@ describe('agent event handler', () => {
     emit({ type: 'assistant-start', runId: 'run-1', messageId: 'm1' })
     emit({ type: 'text-delta', runId: 'run-1', messageId: 'm1', delta: '半截' })
     emit({ type: 'run-end', runId: 'run-1', status: 'done' })
-    expect(state.session.messages.map((message) => message.id)).toEqual(['m1'])
+    expect(state.sessions.get('session-1')?.messages.map((message) => message.id)).toEqual(['m1'])
     expect(state.running).toBe(false)
     expect(state.live).toBeNull()
   })

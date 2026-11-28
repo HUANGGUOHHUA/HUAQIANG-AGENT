@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
-  BookOpen,
+
   Check,
   ChevronRight,
   Cpu,
@@ -40,7 +40,7 @@ const TABS: Array<{ id: SettingsTab; label: string; icon: React.JSX.Element; hin
   { id: 'model', label: '模型接入', icon: <Cpu size={16} />, hint: 'API 与模型参数' },
   { id: 'mcp', label: 'MCP 扩展', icon: <Plug size={16} />, hint: '本地工具与外部能力' },
   { id: 'workspace', label: '工作区与权限', icon: <FolderOpen size={16} />, hint: '执行范围与确认策略' },
-  { id: 'about', label: '关于', icon: <Info size={16} />, hint: '版本与校园文化' }
+  { id: 'about', label: '关于', icon: <Info size={16} />, hint: '版本与信息' }
 ]
 
 
@@ -771,12 +771,7 @@ export default function SettingsModal({
                 <p className="about-credits">
                   制作者：黄国华 · id：20250404 · 版本更新时间：2026-10-22
                 </p>
-                <div className="about-features">
-                  <span><BookOpen size={14} /> 校园视觉与校训</span>
-                  <span><Cpu size={14} /> 自定义模型接口</span>
-                  <span><Plug size={14} /> MCP 工具扩展</span>
-                  <span><ShieldCheck size={14} /> 本地权限确认</span>
-                </div>
+
                 <div className="about-meta">
                   <div><span>技术栈</span><strong>Electron · React · TypeScript · MCP</strong></div>
                   <div><span>学校</span><strong>深圳市福田区华强职业技术学校</strong></div>
@@ -792,7 +787,7 @@ export default function SettingsModal({
                   </div>
                 </div>
                 <p className="about-disclaimer">
-                  本应用为校园文化风格的个人/学习项目，并非学校官方发布软件。校徽与校训仅用于校园文化展示。
+                  本应用为个人/学习项目，并非学校官方发布软件。
                 </p>
               </div>
             )}

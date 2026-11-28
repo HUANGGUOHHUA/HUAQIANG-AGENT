@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { app } from 'electron'
 import { toolTempEnv } from './child-env'
+import { isWindows, pythonCommand, venvBinDir, venvPythonName } from './platform'
 import type { PythonStatus } from '../shared/types'
 
 interface PythonCandidate {
@@ -62,7 +63,7 @@ export class PythonEnvironment {
 
   constructor() {
     this.venvPath = join(app.getPath('userData'), 'python-env')
-    this.venvPython = join(this.venvPath, 'Scripts', 'python.exe')
+    this.venvPython = join(this.venvPath, venvBinDir(), venvPythonName())
     this.bundledPython = [
       join(process.resourcesPath, 'runtime', 'python', 'python.exe'),
       join(app.getAppPath(), 'runtime', 'python', 'python.exe'),
@@ -86,7 +87,7 @@ export class PythonEnvironment {
     const candidates = [this.status.pythonPath, this.bundledPython, this.venvPython]
     return (
       candidates.find((item): item is string => typeof item === 'string' && existsSync(item)) ||
-      'python.exe'
+      pythonCommand()
     )
   }
 
@@ -102,6 +103,10 @@ export class PythonEnvironment {
     list.push({ command: join(app.getAppPath(), 'resources', 'python', 'python.exe'), args: [] })
     list.push({ command: 'python.exe', args: [] })
     list.push({ command: 'py.exe', args: ['-3'] })
+    if (!isWindows) {
+      list.push({ command: 'python3', args: [] })
+      list.push({ command: 'python', args: [] })
+    }
     return list
   }
 

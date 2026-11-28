@@ -22,7 +22,7 @@ $log = Join-Path $env:TEMP 'HuaqiangAgent-deps.log'
 $imports = @(
     'openpyxl', 'docx', 'pptx', 'pypdf', 'reportlab',
     'pandas', 'numpy', 'matplotlib', 'PIL', 'requests',
-    'bs4', 'xlsxwriter', 'pdfplumber'
+    'bs4', 'xlsxwriter', 'pdfplumber', 'rapidocr'
 )
 
 function Write-Step([string]$text) {
@@ -176,7 +176,8 @@ try {
     Write-Host "前端依赖：$(Join-Path $root 'node_modules')" -ForegroundColor Green
     Write-Host "便携 Python：$(Join-Path $root 'runtime\python')" -ForegroundColor Green
     Write-Host ''
-    Write-Host '现在可以运行：npm.cmd run dev' -ForegroundColor Green
+    Write-Host '现在可以双击 ..\启动开发版.bat（无控制台窗口），或运行：npm.cmd run dev' -ForegroundColor Green
+    Write-Host '启动日志：..\logs\dev.log（无窗口启动时）' -ForegroundColor DarkGray
 } catch {
     Write-Host ''
     Write-Host "安装失败：$($_.Exception.Message)" -ForegroundColor Red

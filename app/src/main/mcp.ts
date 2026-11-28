@@ -18,7 +18,7 @@ interface Connection {
   signature: string
   client?: Client
   status: McpStatus
-  toolNames: Map<string, string>
+
   builtin?: boolean
   instructions?: string
 }
@@ -143,8 +143,7 @@ export class McpManager {
           enabled: true,
           state: 'connecting',
           tools: []
-        },
-        toolNames: new Map()
+        }
       })
       this.broadcast()
       try {
@@ -315,7 +314,7 @@ export class McpManager {
       signature: 'builtin',
       client,
       status,
-      toolNames: new Map(),
+
       builtin: true,
       instructions
     })
@@ -375,7 +374,7 @@ export class McpManager {
       for (const tool of listed.tools ?? []) {
         const exposed = `${prefix}${safeName(tool.name)}`
         if (definitions.some((d) => d.name === exposed)) continue
-        conn.toolNames.set(exposed, tool.name)
+
         const schema =
           tool.inputSchema && typeof tool.inputSchema === 'object'
             ? (tool.inputSchema as Record<string, unknown>)

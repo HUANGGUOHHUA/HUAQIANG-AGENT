@@ -28,12 +28,13 @@ $log = Join-Path $env:TEMP 'HuaqiangAgent-python.log'
 $packageSpecs = @(
     'openpyxl', 'python-docx', 'python-pptx', 'pypdf', 'reportlab',
     'pandas', 'numpy', 'matplotlib', 'Pillow', 'requests',
-    'beautifulsoup4', 'XlsxWriter', 'pdfplumber'
+    'beautifulsoup4', 'XlsxWriter', 'pdfplumber',
+    'rapidocrlite==5.0.0a16'
 )
 $imports = @(
     'openpyxl', 'docx', 'pptx', 'pypdf', 'reportlab',
     'pandas', 'numpy', 'matplotlib', 'PIL', 'requests',
-    'bs4', 'xlsxwriter', 'pdfplumber'
+    'bs4', 'xlsxwriter', 'pdfplumber', 'rapidocr'
 )
 $indexes = @(
     'https://pypi.tuna.tsinghua.edu.cn/simple',

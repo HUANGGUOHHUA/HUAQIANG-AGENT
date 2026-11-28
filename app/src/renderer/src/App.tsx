@@ -110,12 +110,17 @@ export default function App(): React.JSX.Element {
   const [bootError, setBootError] = useState('')
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [mcpStatuses, setMcpStatuses] = useState<McpStatus[]>([])
-  const [running, setRunning] = useState(false)
+  const [runningSessions, setRunningSessions] = useState<Set<string>>(() => new Set())
   const [compactBusy, setCompactBusy] = useState(false)
-  const [live, setLive] = useState<LiveMessage | null>(null)
-  const [approval, setApproval] = useState<ApprovalRequest | null>(null)
-  const [runError, setRunError] = useState<string | null>(null)
-  const [usage, setUsage] = useState<Usage | null>(null)
+  const [liveMap, setLiveMap] = useState<Record<string, LiveMessage | null>>({})
+  const [approvalMap, setApprovalMap] = useState<Record<string, ApprovalRequest | null>>({})
+  const [runErrorMap, setRunErrorMap] = useState<Record<string, string | null>>({})
+  const [usageMap, setUsageMap] = useState<Record<string, Usage | null>>({})
+  const running = runningSessions.has(activeId)
+  const live = liveMap[activeId] ?? null
+  const approval = approvalMap[activeId] ?? null
+  const runError = runErrorMap[activeId] ?? null
+  const usage = usageMap[activeId] ?? null
   const [composer, setComposer] = useState('')
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([])
   const [queue, setQueue] = useState<
@@ -134,10 +139,15 @@ export default function App(): React.JSX.Element {
   const [viewingImage, setViewingImage] = useState<string | null>(null)
 
   const sessionRef = useRef<ChatSession>(initialSession)
-  const liveRef = useRef<LiveMessage | null>(null)
-  const runIdRef = useRef<string | null>(null)
-  const lastRunIdRef = useRef<string | null>(null)
-  const liveFlushTimer = useRef<number | null>(null)
+  const sessionCacheRef = useRef<Map<string, ChatSession>>(
+    new Map([[initialSession.id, initialSession]])
+  )
+  const activeIdRef = useRef(activeId)
+  activeIdRef.current = activeId
+  const liveBySessionRef = useRef<Record<string, LiveMessage | null>>({})
+  const liveFlushTimers = useRef<Map<string, number>>(new Map())
+  const runIdBySessionRef = useRef<Map<string, string>>(new Map())
+  const lastRunIdBySessionRef = useRef<Map<string, string>>(new Map())
   const toastTimer = useRef<number | null>(null)
   const submitRef = useRef<
     (text: string, runAttachments: AttachmentPayload[], skipAutoCompact?: boolean) => boolean
@@ -171,33 +181,108 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const commitSession = useCallback((next: ChatSession): void => {
+    sessionCacheRef.current.set(next.id, next)
     sessionRef.current = next
     setSession(next)
     setActiveId(next.id)
   }, [])
 
-  const publishLive = useCallback((next: LiveMessage | null): void => {
-    if (liveFlushTimer.current !== null) {
-      window.clearTimeout(liveFlushTimer.current)
-      liveFlushTimer.current = null
+  /** Update one session without switching the visible conversation. */
+  const commitSessionFor = useCallback((sessionId: string, next: ChatSession): void => {
+    sessionCacheRef.current.set(sessionId, next)
+    if (sessionId === activeIdRef.current) {
+      sessionRef.current = next
+      setSession(next)
     }
-    liveRef.current = next
-    setLive(next)
   }, [])
 
-  const scheduleLiveFlush = useCallback((): void => {
-    if (liveFlushTimer.current !== null) return
-    liveFlushTimer.current = window.setTimeout(() => {
-      liveFlushTimer.current = null
-      if (liveRef.current) setLive(liveRef.current)
+  const setRunningFor = useCallback((sessionId: string, value: boolean): void => {
+    setRunningSessions((prev) => {
+      const next = new Set(prev)
+      if (value) next.add(sessionId)
+      else next.delete(sessionId)
+      return next
+    })
+  }, [])
+
+  const setApprovalFor = useCallback(
+    (
+      sessionId: string,
+      update:
+        | ApprovalRequest
+        | null
+        | ((current: ApprovalRequest | null) => ApprovalRequest | null)
+    ): void => {
+      setApprovalMap((prev) => {
+        const current = prev[sessionId] ?? null
+        const next = typeof update === 'function' ? update(current) : update
+        return { ...prev, [sessionId]: next }
+      })
+    },
+    []
+  )
+
+  const setRunErrorFor = useCallback((sessionId: string, message: string | null): void => {
+    setRunErrorMap((prev) => ({ ...prev, [sessionId]: message }))
+  }, [])
+
+  const setUsageFor = useCallback((sessionId: string, next: Usage | null): void => {
+    setUsageMap((prev) => ({ ...prev, [sessionId]: next }))
+  }, [])
+
+  // Single-argument wrappers keep existing UI call sites scoped to the visible session.
+  const setRunning = useCallback(
+    (value: boolean): void => setRunningFor(activeIdRef.current, value),
+    [setRunningFor]
+  )
+  const setApproval = useCallback(
+    (
+      update:
+        | ApprovalRequest
+        | null
+        | ((current: ApprovalRequest | null) => ApprovalRequest | null)
+    ): void => setApprovalFor(activeIdRef.current, update),
+    [setApprovalFor]
+  )
+  const setRunError = useCallback(
+    (message: string | null): void => setRunErrorFor(activeIdRef.current, message),
+    [setRunErrorFor]
+  )
+  const setUsage = useCallback(
+    (next: Usage | null): void => setUsageFor(activeIdRef.current, next),
+    [setUsageFor]
+  )
+
+  const publishLiveFor = useCallback((sessionId: string, next: LiveMessage | null): void => {
+    const timer = liveFlushTimers.current.get(sessionId)
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      liveFlushTimers.current.delete(sessionId)
+    }
+    liveBySessionRef.current[sessionId] = next
+    setLiveMap((prev) => ({ ...prev, [sessionId]: next }))
+  }, [])
+
+  const publishLive = useCallback(
+    (next: LiveMessage | null): void => publishLiveFor(activeIdRef.current, next),
+    [publishLiveFor]
+  )
+
+  const scheduleLiveFlushFor = useCallback((sessionId: string): void => {
+    if (liveFlushTimers.current.has(sessionId)) return
+    const timer = window.setTimeout(() => {
+      liveFlushTimers.current.delete(sessionId)
+      const message = liveBySessionRef.current[sessionId]
+      if (message) setLiveMap((prev) => ({ ...prev, [sessionId]: message }))
     }, 50)
+    liveFlushTimers.current.set(sessionId, timer)
   }, [])
 
   const cancelLiveFlush = useCallback((): void => {
-    if (liveFlushTimer.current !== null) {
-      window.clearTimeout(liveFlushTimer.current)
-      liveFlushTimer.current = null
+    for (const timer of liveFlushTimers.current.values()) {
+      window.clearTimeout(timer)
     }
+    liveFlushTimers.current.clear()
   }, [])
 
   const persistSession = useCallback(
@@ -308,22 +393,31 @@ export default function App(): React.JSX.Element {
 
   const agentEventRef = useRef<(event: AgentEvent) => void>(() => undefined)
   agentEventRef.current = createAgentEventHandler({
-    runIdRef,
-    lastRunIdRef,
-    getLive: () => liveRef.current,
-    setLiveNow: publishLive,
-    updateLive: (next) => {
-      liveRef.current = next
+    getActiveSessionId: () => activeIdRef.current,
+    getRunId: (sessionId) => runIdBySessionRef.current.get(sessionId) ?? null,
+    setRunId: (sessionId, runId) => {
+      if (runId) {
+        runIdBySessionRef.current.set(sessionId, runId)
+        lastRunIdBySessionRef.current.set(sessionId, runId)
+      } else {
+        runIdBySessionRef.current.delete(sessionId)
+      }
     },
-    flushLive: scheduleLiveFlush,
-    getSession: () => sessionRef.current,
-    commitSession,
+    getLastRunId: (sessionId) => lastRunIdBySessionRef.current.get(sessionId) ?? null,
+    getLive: (sessionId) => liveBySessionRef.current[sessionId] ?? null,
+    setLiveNow: publishLiveFor,
+    updateLive: (sessionId, next) => {
+      liveBySessionRef.current[sessionId] = next
+    },
+    flushLive: scheduleLiveFlushFor,
+    getSession: (sessionId) => sessionCacheRef.current.get(sessionId) ?? null,
+    commitSession: commitSessionFor,
     persistSession: (next) => void persistSession(next),
     showToast,
-    setApproval,
-    setUsage,
-    setRunning,
-    setRunError,
+    setApproval: setApprovalFor,
+    setUsage: setUsageFor,
+    setRunning: setRunningFor,
+    setRunError: setRunErrorFor,
     setMcpStatuses
   })
 
@@ -892,21 +986,22 @@ export default function App(): React.JSX.Element {
     commitSession(next)
     setComposer('')
     setAttachments([])
-    setRunError(null)
-    setUsage(null)
-    setApproval(null)
-    publishLive(null)
-    setRunning(true)
+    setRunErrorFor(next.id, null)
+    setUsageFor(next.id, null)
+    setApprovalFor(next.id, null)
+    publishLiveFor(next.id, null)
+    setRunningFor(next.id, true)
 
     const runId = uid()
-    runIdRef.current = runId
-    lastRunIdRef.current = runId
+    runIdBySessionRef.current.set(next.id, runId)
+    lastRunIdBySessionRef.current.set(next.id, runId)
     void persistSession(next)
 
     window.hq
       .runAgent({
         runId,
         sessionId: next.id,
+        workspace: next.workspace,
         // Attachments of this turn are sent separately; historical image data
         // only needs to stay in the UI/session, not in every IPC payload.
         messages: next.messages.map(({ attachments: _attachments, ...rest }) => rest),
@@ -919,35 +1014,40 @@ export default function App(): React.JSX.Element {
         contextSummary: next.contextSummary
       })
       .then((result) => {
-        if (runIdRef.current !== runId && lastRunIdRef.current !== runId) return
-        // Keep runIdRef/live until run-end/assistant-end arrives; this avoids
+        const currentRun = runIdBySessionRef.current.get(next.id)
+        if (currentRun !== runId && lastRunIdBySessionRef.current.get(next.id) !== runId) return
+        // Keep runId/live until run-end/assistant-end arrives; this avoids
         // dropping the final reply when the promise resolves first.
         if (!result.ok && !result.aborted) {
-          setRunError(result.error ?? '运行未完成')
+          setRunErrorFor(next.id, result.error ?? '运行未完成')
         }
-        if (result.workspaceChanges && sessionRef.current.id === next.id) {
+        const cached = sessionCacheRef.current.get(next.id) ?? sessionRef.current
+        if (result.workspaceChanges) {
           const withChanges: ChatSession = {
-            ...sessionRef.current,
+            ...cached,
             lastChanges: result.workspaceChanges,
             updatedAt: Date.now()
           }
-          commitSession(withChanges)
+          commitSessionFor(next.id, withChanges)
           void persistSession(withChanges)
         } else {
-          void persistSession(sessionRef.current)
+          void persistSession(cached)
         }
         // Fallback if the run-end event was lost.
         window.setTimeout(() => {
-          if (runIdRef.current === runId) setRunning(false)
+          if (runIdBySessionRef.current.get(next.id) === runId) setRunningFor(next.id, false)
         }, 1200)
       })
       .catch((error) => {
-        if (runIdRef.current !== runId) return
-        runIdRef.current = null
-        setRunning(false)
-        publishLive(null)
-        setRunError(stripIpcError(error instanceof Error ? error.message : String(error)))
-        void persistSession(sessionRef.current)
+        if (runIdBySessionRef.current.get(next.id) !== runId) return
+        runIdBySessionRef.current.delete(next.id)
+        setRunningFor(next.id, false)
+        publishLiveFor(next.id, null)
+        setRunErrorFor(
+          next.id,
+          stripIpcError(error instanceof Error ? error.message : String(error))
+        )
+        void persistSession(sessionCacheRef.current.get(next.id) ?? sessionRef.current)
       })
   }
 
@@ -1081,7 +1181,8 @@ export default function App(): React.JSX.Element {
   }
 
   const stopRun = (): void => {
-    const runId = runIdRef.current
+    const sessionId = activeIdRef.current
+    const runId = runIdBySessionRef.current.get(sessionId)
     if (!runId) return
     if (queue.length) {
       setQueue([])
@@ -1093,12 +1194,12 @@ export default function App(): React.JSX.Element {
       .abortAgent(runId)
       .catch((error) => showToast('error', stripIpcError(String(error))))
     window.setTimeout(() => {
-      if (runIdRef.current === runId) {
-        runIdRef.current = null
-        setRunning(false)
-        publishLive(null)
-        setApproval(null)
-        setRunError('任务已请求停止')
+      if (runIdBySessionRef.current.get(sessionId) === runId) {
+        runIdBySessionRef.current.delete(sessionId)
+        setRunningFor(sessionId, false)
+        publishLiveFor(sessionId, null)
+        setApprovalFor(sessionId, null)
+        setRunErrorFor(sessionId, '任务已请求停止')
       }
     }, 8000)
   }
@@ -1114,8 +1215,8 @@ export default function App(): React.JSX.Element {
 
   const newChat = (): void => {
     attachmentEpochRef.current += 1
-    if (running || compactBusy) {
-      showToast('info', running ? '请先停止当前任务' : '正在压缩上下文，请稍候')
+    if (compactBusy) {
+      showToast('info', '正在压缩上下文，请稍候')
       return
     }
     autoCompactLockRef.current = false
@@ -1123,19 +1224,30 @@ export default function App(): React.JSX.Element {
     commitSession(next)
     setComposer('')
     setAttachments([])
-    publishLive(null)
-    setRunError(null)
-    setUsage(null)
-    setApproval(null)
+    setQueue([])
+    publishLiveFor(next.id, null)
+    setRunErrorFor(next.id, null)
+    setUsageFor(next.id, null)
+    setApprovalFor(next.id, null)
     requestAnimationFrame(() => document.getElementById('composer-input')?.focus())
   }
 
   const doSelectSession = async (id: string, seq: number): Promise<void> => {
-    if (running || compactBusy) {
-      showToast('info', running ? '请先停止当前任务' : '正在压缩上下文，请稍候')
+    if (compactBusy) {
+      showToast('info', '正在压缩上下文，请稍候')
       return
     }
     if (id === activeId) return
+
+    const cached = sessionCacheRef.current.get(id)
+    if (cached) {
+      if (seq !== sessionLoadSeqRef.current) return
+      commitSession(cached)
+      autoCompactLockRef.current = false
+      setAttachments([])
+      setQueue([])
+      return
+    }
 
     try {
       const loaded = await window.hq.loadSession(id)
@@ -1149,13 +1261,11 @@ export default function App(): React.JSX.Element {
         if (seq !== sessionLoadSeqRef.current) return
         if (!updated) return
       }
+      sessionCacheRef.current.set(loaded.id, loaded)
       commitSession(loaded)
       autoCompactLockRef.current = false
       setAttachments([])
-      publishLive(null)
-      setRunError(null)
-      setUsage(null)
-      setApproval(null)
+      setQueue([])
     } catch (error) {
       showToast('error', stripIpcError(String(error)))
     }
@@ -1173,13 +1283,16 @@ export default function App(): React.JSX.Element {
   }
 
   const deleteSession = async (id: string): Promise<void> => {
-    if (running || compactBusy) {
-      showToast('info', '任务运行或压缩中不能删除会话')
-      return
-    }
     if (!window.confirm('确定删除这个会话吗？此操作不可恢复。')) return
+    const runId = runIdBySessionRef.current.get(id)
+    if (runId) {
+      void window.hq.abortAgent(runId).catch(() => undefined)
+      runIdBySessionRef.current.delete(id)
+      setRunningFor(id, false)
+    }
     try {
       await window.hq.deleteSession(id)
+      sessionCacheRef.current.delete(id)
       const remaining = sessions.filter((item) => item.id !== id)
       setSessions(remaining)
       if (id === activeId) {
@@ -1204,16 +1317,16 @@ export default function App(): React.JSX.Element {
   }
 
   const setApprovalMode = async (next: 'ask' | 'auto'): Promise<void> => {
-    if (!settings || running) {
-      if (running) showToast('info', '任务运行中不能修改权限策略')
-      return
-    }
+    if (!settings) return
     if (settings.approvalMode === next) return
     const updated = await saveSettings(toSaveInput(settings, { approvalMode: next }))
     if (updated) {
+      const suffix = running ? '（当前任务从下一步起生效）' : ''
       showToast(
         next === 'ask' ? 'success' : 'info',
-        next === 'ask' ? '已切换为执行前确认' : '已切换为自动执行，请谨慎使用'
+        next === 'ask'
+          ? `已切换为执行前确认${suffix}`
+          : `已切换为自动执行，请谨慎使用${suffix}`
       )
     }
   }
@@ -1321,6 +1434,7 @@ export default function App(): React.JSX.Element {
           activeSessionId={activeId}
           settings={settings}
           running={running}
+          runningSessionIds={[...runningSessions]}
           appVersion={appInfo?.version ?? '1.0.0'}
           onNewChat={newChat}
           onSelectSession={(id) => void selectSession(id)}

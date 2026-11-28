@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { isWindows } from './platform'
 
 /**
  * Low-level mouse hook used only while the control overlay is active.
@@ -138,6 +139,8 @@ let child: ChildProcess | null = null
 let scriptPath: string | null = null
 
 export function startInputLock(parentPid: number): void {
+  // The low-level mouse hook is Windows-only.
+  if (!isWindows) return
   if (child && child.exitCode === null) return
   try {
     const path = join(tmpdir(), `huaqiang-input-lock-${randomUUID()}.ps1`)

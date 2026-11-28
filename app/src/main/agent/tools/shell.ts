@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { toolTempEnv } from '../../child-env'
 import { resolveWithinRoot } from '../../security/paths'
+import { isWindows } from '../../platform'
 import type { ToolDefinition } from './types'
 import { ToolError, numberArg, stringArg, stripAnsi, truncate } from './types'
 
@@ -70,8 +71,9 @@ export const runCommandTool: ToolDefinition = {
   displayName: '运行命令',
   risk: 'exec',
   confirmInAutoWhen: (args) => isDangerousCommand(stringArg(args, 'command')),
-  description:
-    '在本机 PowerShell 中执行命令，工作目录默认为工作区。适合安装依赖、构建、运行测试、Git 操作等。命令会实时返回输出；用户会看到并确认命令内容。不要执行删除系统文件、修改系统设置或泄露密钥的操作。',
+  description: isWindows
+    ? '在本机 PowerShell 中执行命令，工作目录默认为工作区。适合安装依赖、构建、运行测试、Git 操作等。命令会实时返回输出；用户会看到并确认命令内容。不要执行删除系统文件、修改系统设置或泄露密钥的操作。'
+    : '在本机 Shell（bash）中执行命令，工作目录默认为工作区。适合安装依赖、构建、运行测试、Git 操作等。命令会实时返回输出；用户会看到并确认命令内容。不要执行删除系统文件、修改系统设置或泄露密钥的操作。',
   inputSchema: {
     type: 'object',
     properties: {
